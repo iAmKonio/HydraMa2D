@@ -4,6 +4,12 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
+#include <limits>
+#include <vector>
+#include <cmath>
+#include <cstdlib>
+#include <cerrno>
+#include <cstring>
 
 namespace hydrama {
 
@@ -99,21 +105,56 @@ bool IO::read_mesh(const std::string& filepath, Mesh& mesh) {
         std::cerr << "ERROR: CANNOT READ MESH DIMENSIONS\n";
         return false;
     }
+    if (mesh.nelem < 1 || mesh.npoin < 1 || mesh.nboun < 0) {
+        std::cerr << "ERROR: INVALID MESH DIMENSIONS: " << mesh.nelem << " ELEMENTS, "
+                  << mesh.npoin << " NODES, " << mesh.nboun << " BOUNDARY SIDES\n";
+        return false;
+    }
 
     mesh.intma.resize(mesh.nelem);
     mesh.x.resize(mesh.npoin);
     mesh.y.resize(mesh.npoin);
     mesh.iside.resize(mesh.nboun);
 
+    // Ids in the file are 1-based. Every id must be in range and appear only
+    // once; together with the entry counts this guarantees that every element
+    // and node is assigned exactly once (no gaps, no out-of-bounds writes).
+    auto in_range = [](int id, int n) { return id >= 1 && id <= n; };
+
+    std::vector<char> elem_seen(mesh.nelem, 0);
     for (int i = 0; i < mesh.nelem; ++i) {
         int elem_id, n1, n2, n3;
         if (!(in >> elem_id >> n1 >> n2 >> n3)) {
             std::cerr << "ERROR: CANNOT READ ELEMENT CONNECTIVITY AT ELEM " << (i + 1) << "\n";
             return false;
         }
+        if (!in_range(elem_id, mesh.nelem)) {
+            std::cerr << "ERROR: ELEMENT ID " << elem_id << " OUT OF RANGE 1.." << mesh.nelem
+                      << " (ENTRY " << (i + 1) << " OF ELEMENT SECTION)\n";
+            return false;
+        }
+        if (elem_seen[elem_id - 1]) {
+            std::cerr << "ERROR: DUPLICATE ELEMENT ID " << elem_id
+                      << " (ENTRY " << (i + 1) << " OF ELEMENT SECTION)\n";
+            return false;
+        }
+        for (int n : {n1, n2, n3}) {
+            if (!in_range(n, mesh.npoin)) {
+                std::cerr << "ERROR: ELEMENT " << elem_id << " REFERENCES NODE " << n
+                          << " OUT OF RANGE 1.." << mesh.npoin << "\n";
+                return false;
+            }
+        }
+        if (n1 == n2 || n1 == n3 || n2 == n3) {
+            std::cerr << "ERROR: ELEMENT " << elem_id << " HAS REPEATED NODES "
+                      << n1 << " " << n2 << " " << n3 << "\n";
+            return false;
+        }
+        elem_seen[elem_id - 1] = 1;
         mesh.intma[elem_id - 1] = {n1 - 1, n2 - 1, n3 - 1};
     }
 
+    std::vector<char> node_seen(mesh.npoin, 0);
     for (int i = 0; i < mesh.npoin; ++i) {
         int node_id;
         double x_coord, y_coord;
@@ -121,6 +162,17 @@ bool IO::read_mesh(const std::string& filepath, Mesh& mesh) {
             std::cerr << "ERROR: CANNOT READ NODAL COORDINATE AT NODE " << (i + 1) << "\n";
             return false;
         }
+        if (!in_range(node_id, mesh.npoin)) {
+            std::cerr << "ERROR: NODE ID " << node_id << " OUT OF RANGE 1.." << mesh.npoin
+                      << " (ENTRY " << (i + 1) << " OF NODE SECTION)\n";
+            return false;
+        }
+        if (node_seen[node_id - 1]) {
+            std::cerr << "ERROR: DUPLICATE NODE ID " << node_id
+                      << " (ENTRY " << (i + 1) << " OF NODE SECTION)\n";
+            return false;
+        }
+        node_seen[node_id - 1] = 1;
         mesh.x[node_id - 1] = x_coord;
         mesh.y[node_id - 1] = y_coord;
     }
@@ -129,6 +181,16 @@ bool IO::read_mesh(const std::string& filepath, Mesh& mesh) {
         int n1, n2, elem_id, side_id;
         if (!(in >> n1 >> n2 >> elem_id >> side_id)) {
             std::cerr << "ERROR: CANNOT READ BOUNDARY SIDE AT SIDE " << (i + 1) << "\n";
+            return false;
+        }
+        if (!in_range(n1, mesh.npoin) || !in_range(n2, mesh.npoin)) {
+            std::cerr << "ERROR: BOUNDARY SIDE " << (i + 1) << " REFERENCES NODE "
+                      << (in_range(n1, mesh.npoin) ? n2 : n1) << " OUT OF RANGE 1.." << mesh.npoin << "\n";
+            return false;
+        }
+        if (!in_range(elem_id, mesh.nelem)) {
+            std::cerr << "ERROR: BOUNDARY SIDE " << (i + 1) << " REFERENCES ELEMENT " << elem_id
+                      << " OUT OF RANGE 1.." << mesh.nelem << "\n";
             return false;
         }
         mesh.iside[i].node1 = n1 - 1;
@@ -181,6 +243,29 @@ bool IO::read_boundary_flags(const std::string& filepath, Mesh& mesh) {
     return true;
 }
 
+static bool parse_restart_double(std::string token, double& out) {
+    if (token.empty()) return false;
+    for (char& c : token) {
+        if (c == 'd' || c == 'D') {
+            c = 'e';
+        }
+    }
+    char* end = nullptr;
+    errno = 0;
+    double val = std::strtod(token.c_str(), &end);
+    if (end == token.c_str() || *end != '\0') {
+        return false;
+    }
+    if (std::isnan(val) || std::isinf(val)) {
+        return false;
+    }
+    if (errno == ERANGE && (val == HUGE_VAL || val == -HUGE_VAL)) {
+        return false;
+    }
+    out = val;
+    return true;
+}
+
 bool IO::read_restart(const std::string& filepath,
                       double& rtime, int& istart,
                       std::vector<double>& u,
@@ -191,13 +276,23 @@ bool IO::read_restart(const std::string& filepath,
         return false;
     }
 
-    if (!(in >> rtime >> istart)) {
+    std::string token_time;
+    if (!(in >> token_time >> istart)) {
+        return false;
+    }
+    if (!parse_restart_double(token_time, rtime)) {
         return false;
     }
 
     size_t npoin = u.size();
+    std::string tu, tv, tp;
     for (size_t i = 0; i < npoin; ++i) {
-        if (!(in >> u[i] >> v[i] >> p[i])) {
+        if (!(in >> tu >> tv >> tp)) {
+            return false;
+        }
+        if (!parse_restart_double(tu, u[i]) ||
+            !parse_restart_double(tv, v[i]) ||
+            !parse_restart_double(tp, p[i])) {
             return false;
         }
     }
@@ -216,7 +311,10 @@ bool IO::write_restart(const std::string& filepath,
         return false;
     }
 
-    out << std::setprecision(10);
+    // 17 significant digits (max_digits10) so that every double - time and
+    // fields - reads back bit-for-bit and restarted runs continue exactly.
+    // In scientific notation the precision counts the digits after the point.
+    out << std::scientific << std::setprecision(std::numeric_limits<double>::max_digits10 - 1);
     if (transient_on > 0) {
         out << rtime << " " << iitime << "\n";
     } else {
@@ -224,7 +322,6 @@ bool IO::write_restart(const std::string& filepath,
     }
 
     size_t npoin = u.size();
-    out << std::setprecision(8) << std::scientific;
     for (size_t i = 0; i < npoin; ++i) {
         out << u[i] << " " << v[i] << " " << p[i] << "\n";
     }
