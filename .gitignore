@@ -1,0 +1,26 @@
+# macOS system files
+.DS_Store
+._*
+
+# Build artifacts and binaries
+*.o
+*.a
+*.so
+*.dylib
+HydraMa2D
+HydraMa2D.exe
+HydraMa2D_cpp
+build/
+bin/
+
+# Temporary and swap files
+*.swp
+*.swo
+*~
+fort.*
+*.log
+
+# Simulation outputs (preserve results directory with .gitkeep)
+**/results/*.vtk
+**/results/*.var
+!**/results/.gitkeep
