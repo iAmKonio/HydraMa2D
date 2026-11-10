@@ -1,14 +1,23 @@
 #include "Step1.hpp"
 
+#include <stdexcept>
+
 namespace hydrama {
 
-void compute_step1(const Mesh& mesh,
-                   double ani,
-                   const std::vector<double>& delte,
-                   const std::vector<double>& u,
-                   const std::vector<double>& v,
-                   std::vector<double>& rhs_u,
-                   std::vector<double>& rhs_v) {
+namespace {
+
+// Shared element kernel. kTurbulent == false is the original laminar Step 1
+// (same expressions, same order); kTurbulent == true adds the symmetric
+// eddy-viscosity stress after the molecular term.
+template <bool kTurbulent>
+void step1_kernel(const Mesh& mesh,
+                  double ani,
+                  const std::vector<double>* nut_elem,
+                  const std::vector<double>& delte,
+                  const std::vector<double>& u,
+                  const std::vector<double>& v,
+                  std::vector<double>& rhs_u,
+                  std::vector<double>& rhs_v) {
     rhs_u.assign(mesh.npoin, 0.0);
     rhs_v.assign(mesh.npoin, 0.0);
 
@@ -70,6 +79,21 @@ void compute_step1(const Mesh& mesh,
             lrhs_v[in] -= (dNdx[in] * dNudx_vx + dNdy[in] * dNudx_vy) * lfact_diff;
         }
 
+        // --- Turbulent stress (symmetric form) ---
+        if constexpr (kTurbulent) {
+            const double nut = (*nut_elem)[ie];
+            if (nut != 0.0) {
+                const double lfact_turb = ldetJ * nut * 0.5; // A_e nu_t,e
+                const double two_ux = 2.0 * dNudx_ux;
+                const double two_vy = 2.0 * dNudx_vy;
+                const double shear = dNudx_uy + dNudx_vx;
+                for (int in = 0; in < 3; ++in) {
+                    lrhs_u[in] -= (dNdx[in] * two_ux + dNdy[in] * shear) * lfact_turb;
+                    lrhs_v[in] -= (dNdx[in] * shear + dNdy[in] * two_vy) * lfact_turb;
+                }
+            }
+        }
+
         // Assemble into global RHS
         for (int in = 0; in < 3; ++in) {
             int ip = ipn[in];
@@ -77,6 +101,36 @@ void compute_step1(const Mesh& mesh,
             rhs_v[ip] += lrhs_v[in];
         }
     }
+}
+
+} // namespace
+
+void compute_step1(const Mesh& mesh,
+                   double ani,
+                   const std::vector<double>& delte,
+                   const std::vector<double>& u,
+                   const std::vector<double>& v,
+                   std::vector<double>& rhs_u,
+                   std::vector<double>& rhs_v) {
+    step1_kernel<false>(mesh, ani, nullptr, delte, u, v, rhs_u, rhs_v);
+}
+
+void compute_step1(const Mesh& mesh,
+                   double ani,
+                   const std::vector<double>& nut_elem,
+                   const std::vector<double>& delte,
+                   const std::vector<double>& u,
+                   const std::vector<double>& v,
+                   std::vector<double>& rhs_u,
+                   std::vector<double>& rhs_v) {
+    if (nut_elem.empty()) {
+        step1_kernel<false>(mesh, ani, nullptr, delte, u, v, rhs_u, rhs_v);
+        return;
+    }
+    if (static_cast<int>(nut_elem.size()) != mesh.nelem) {
+        throw std::invalid_argument("compute_step1: nut_elem must have one value per element");
+    }
+    step1_kernel<true>(mesh, ani, &nut_elem, delte, u, v, rhs_u, rhs_v);
 }
 
 } // namespace hydrama

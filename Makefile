@@ -1,8 +1,8 @@
 CXX ?= clang++
-CXXFLAGS = -O3 -Wall -Wextra -std=c++17 -Iinclude
+CXXFLAGS = -O3 -Wall -Wextra -std=c++17 -Iinclude -ffp-contract=off
 TARGET = HydraMa2D
 
-SRCS = $(wildcard src/*.cpp src/linalg/*.cpp)
+SRCS = $(wildcard src/*.cpp src/*/*.cpp)
 OBJS = $(SRCS:.cpp=.o)
 
 .PHONY: all clean
@@ -16,4 +16,4 @@ $(TARGET): $(OBJS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(TARGET) src/*.o src/linalg/*.o
+	rm -f $(TARGET) src/*.o src/*/*.o

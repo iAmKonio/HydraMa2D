@@ -14,9 +14,10 @@
 - **Extensible linear solver layer (`hydrama::linalg`):** CG, BiCGSTAB and restarted GMRES(m); matrix-free (EBE) or assembled (CSR) operators; Jacobi / SSOR / IC(0) / ILU(0) preconditioners with reverse Cuthill-McKee reordering, all selectable in `<case>.solver` (see [Linear Solver Architecture](#linear-solver-architecture)).
 - **Adaptive Timestepping:** Automatic computation of local and global time steps constrained by convective CFL and diffusive stability limits.
 - **Case Structure:** OpenFOAM-style directory structure (`constant/`, `system/`, `results/`).
+- **RANS Turbulence Modelling (optional):** Spalart–Allmaras (negative-SA), Menter k-ω SST, standard k-ε with log-law wall functions and Launder–Sharma low-Re k-ε, enabled by `system/<case>.turbulence` (see [Turbulence Modelling](#turbulence-modelling) and `docs/TURBULENCE_DESIGN.md`).
 - **Standard Outputs:**
-  - ASCII VTK unstructured grids (`results/<case>_<time>.vtk`) for visualization in ParaView.
-  - Checkpoint / restart data files (`results/<case>.var`), written with 17 significant digits so that a restarted run continues bit-for-bit.
+  - ASCII VTK unstructured grids (`results/<case>_<time>.vtk`) for visualization in ParaView; turbulent runs add the turbulence fields, the wall distance and y+.
+  - Checkpoint / restart data files (`results/<case>.var`, and `results/<case>.turb.var` for turbulence), written with 17 significant digits so that a restarted run continues bit-for-bit.
 
 ---
 
@@ -29,16 +30,38 @@ HydraMa.dev/
 ├── README.md                     # Documentation
 ├── docs/
 │   ├── LINEAR_SOLVER_REFERENCES.md  # Literature behind the linear solver algorithms
-│   └── REVIEWER_GUIDE.md            # Build, test, sanitizer and benchmark instructions
+│   ├── REVIEWER_GUIDE.md            # Build, test, sanitizer and benchmark instructions
+│   └── TURBULENCE_DESIGN.md         # RANS turbulence modelling design specification
 ├── tools/
 │   └── benchmark.sh              # Reproducible benchmark of the solver configurations
 ├── include/                      # C++ Header files
 │   ├── BoundaryConditions.hpp
+│   ├── BoundaryKind.hpp          # Flag code -> wall / inlet / outlet / symmetry
 │   ├── Config.hpp
 │   ├── IO.hpp
 │   ├── LinearSolver.hpp          # EBE assembly/mat-vec, legacy solve_pcg() adapter, time step
 │   ├── Mesh.hpp
 │   ├── PressureSolver.hpp        # Facade: pressure Poisson solve used by the time loop
+│   ├── geometry/                 # Wall geometry, wall distance, field operations
+│   │   ├── FieldOps.hpp          # Gradients, S, Omega, projection, PPR gradient recovery
+│   │   ├── SegmentTree.hpp       # AABB tree, exact nearest-segment queries
+│   │   ├── WallDistance.hpp      # Wall distance strategies (AABB tree, brute force)
+│   │   └── WallGeometry.hpp      # Wall faces, inward normals, y_p, wall distance
+│   ├── numerics/                 # Shared transport numerics
+│   │   ├── DirichletSet.hpp      # Compiled Dirichlet conditions
+│   │   ├── PointImplicit.hpp     # Point-implicit / Patankar source update
+│   │   └── ScalarTransport.hpp   # Fused CBS scalar transport kernel
+│   ├── turbulence/               # RANS turbulence models
+│   │   ├── KEpsilon.hpp          # k-epsilon family (standard + wall functions, Launder-Sharma)
+│   │   ├── KOmegaSST.hpp         # Menter k-omega SST (ln omega)
+│   │   ├── SpalartAllmaras.hpp   # SA with negative-SA extension
+│   │   ├── TransportModelBase.hpp # CRTP skeleton of transport-equation models
+│   │   ├── TurbulenceBC.hpp      # Turbulence boundary conditions
+│   │   ├── TurbulenceConfig.hpp  # system/<case>.turbulence parser
+│   │   ├── TurbulenceFactory.hpp # Model factory
+│   │   ├── TurbulenceModel.hpp   # Model interface
+│   │   ├── WallFunctions.hpp     # Log-law wall functions
+│   │   └── WallUnits.hpp         # Wall shear stress, friction velocity, y+
 │   ├── linalg/                   # Linear algebra layer (namespace hydrama::linalg)
 │   │   ├── Linalg.hpp            # Umbrella header
 │   │   ├── VectorView.hpp        # Non-owning vector views
@@ -78,6 +101,9 @@ HydraMa.dev/
 │   ├── LinearSolver.cpp
 │   ├── Mesh.cpp
 │   ├── PressureSolver.cpp
+│   ├── geometry/
+│   ├── numerics/
+│   ├── turbulence/
 │   ├── linalg/                   # Implementations of include/linalg/*
 │   ├── Solver.cpp
 │   ├── Step1.cpp
@@ -225,6 +251,19 @@ ctest --test-dir build -R "[Nn]ormal"        # run tests whose name matches a (c
 | `[symmetry]` | `apply_symmetry_bc` | normal component removed, tangential kept, flag selection, corners |
 | `[velocity_bc]` | `apply_velocity_bcs` | uniform inflow, step inflow profile, no-slip walls, precedence at corners |
 | `[io]` | `IO::*` | Fortran number parsing, config/mesh/flag readers, mesh id validation, bit-exact restart and VTK round trips, error handling |
+| `[boundary_kind]` | `classify_boundary_flag` | flag code table, agreement with the legacy wall / inlet / outlet / symmetry handling |
+| `[wallgeom]` | `WallGeometry` | wall faces, inward normals (orientation independent), first-cell height `y_p`, corner bisector normals, node-to-face map, input validation |
+| `[walldist]` | `WallDistanceCalculator`, `SegmentAabbTree` | exact wall distance vs. analytic channel, backward-facing step and benchmark geometries; AABB tree bit-identical to brute force; 1-Lipschitz; rigid-motion invariance |
+| `[turbulence_config]` | `parse_turbulence_config`, `IO::read_turbulence`, `make_turbulence_model` | defaults, complete file, per-flag overrides, error messages with line numbers, missing file = laminar, factory |
+| `[field_ops]` `[recovery]` | `FieldOps`, `NodalGradient` | S / Omega of elementary flows and frame invariance, exact gradients, lumped projection, PPR exact for quadratics and second order |
+| `[transport]` `[point_implicit]` `[positivity]` | `assemble_scalar_transport`, `point_implicit_update` | reproduces Step 1, fused = separate, conservation, variable diffusivity, second-order MMS, implicit-Euler decay, Patankar positivity |
+| `[sa]` | `SpalartAllmaras`, `sa::*` | closure functions, source terms at reference points, log-layer balance, negative SA, BCs, exact shear ODE, exact log-layer solution |
+| `[coupling]` | `compute_step1` (with `nut_elem`), `compute_timestep` (with `nu_eff_elem`) | bit-identical to laminar for zero eddy viscosity, symmetric stress vs tensor reference, objectivity, transpose term, conservation |
+| `[wall_units]` | `wall_friction_velocity`, `yplus_field`, `first_cell_yplus` | Couette flow, frame and orientation invariance, no walls |
+| `[turbulence_io]` | `IO::write_vtk` (point scalars), `IO::write/read_turbulence_restart` | byte-exact VTK, unchanged laminar VTK, bit-exact restart round trip, error handling |
+| `[sst]` | `KOmegaSST`, `sst::*` | F1/F2 blending, shear stress limiter, sources and production limiter, ln ω linearisation, wall/inlet BCs, analytical decay, exact log-layer solution |
+| `[kepsilon]` | `KEpsilon<...>`, `ke::*`, `wallfn::*` | Launder–Sharma damping, D and E terms, sources and limiter, Riccati update, analytical / RK4 decay, log-law consistency, positivity |
+| `[solver][turbulence]` | `Solver` with turbulence | laminar bit-identity, benchmark runs for all models: health, wall/inlet values, VTK fields, reference values, determinism, bit-for-bit restart |
 | `[linalg][vector]` | `linalg::Span`, `VectorOps` | views and const-correctness, kernel values, size checks, aliasing, sequential (reproducible) reductions |
 | `[linalg][operator]` | `EbeOperator`, `ConstrainedOperator`, `LinearOperator` | bit-for-bit equal to the original mat-vec, dense reference, diagonal, symmetry, live view of coefficients, Dirichlet rows, input validation |
 | `[linalg][constraints]` | `DirichletConstraints` | impose / zero / mask, duplicates, validation |
@@ -325,6 +364,54 @@ Without reordering, IC(0) saves iterations but not time: the original node numbe
 
 ---
 
+## Turbulence Modelling
+
+Turbulence is enabled by an optional key-value file `system/<case>.turbulence`
+(no file, or `model none`, runs exactly the laminar solver). Minimal example:
+
+```
+model k-omega-sst
+```
+
+| `model` | Model | Transported variables | Wall treatment |
+| :--- | :--- | :--- | :--- |
+| `spalart-allmaras` | Spalart–Allmaras with negative-SA extension | `nu_tilde` | resolved (low-Re) |
+| `k-omega-sst` | Menter k-ω SST (2003), F1/F2 blending, cross diffusion, shear stress limiter | `k`, `log_omega` (ln ω) | resolved (low-Re) |
+| `k-epsilon` | Standard k-ε (Launder–Spalding) | `k`, `epsilon` | log-law wall functions |
+| `launder-sharma-k-epsilon` | Launder–Sharma low-Re k-ε with damping functions | `k`, `epsilon_tilde` | resolved (low-Re) |
+
+Optional settings (defaults in brackets): inlet turbulence `inlet_intensity`
+[0.05] and `inlet_length_scale` [0.1] (k = 1.5 (U_ref I)^2 with
+`reference_velocity` [1]), or `inlet_viscosity_ratio` (nu_t/nu), or direct
+`inlet_k` / `inlet_epsilon` / `inlet_omega`; SA: `inlet_nu_tilde_ratio` [3],
+`sa_ft2` [on]; two-equation models: `production_limiter` [10, 0 = off];
+`wall_treatment` [model default]; `wall_distance` [exact | brute-force];
+`gradient_recovery` [ppr | lumped-projection]; `nut_ratio_max` [1e5]; and
+per-flag overrides such as `boundary 503 inlet k 1e-3 omega 5` or
+`boundary 506 symmetry`. Comments start with `#`; unknown keys are errors.
+See `docs/TURBULENCE_DESIGN.md` for the models, numerics and verification.
+
+With a turbulence model the solver
+- adds the eddy viscosity to Step 1 (symmetric stress form),
+- limits the time step with nu_eff = max(nu + nu_t, turbulence diffusivities),
+- advances the turbulence equations after Step 3,
+- logs per step `Turbulence: <variable> change ... nut/nu max ... y+ (first cell) min/mean/max`,
+- writes the model fields as VTK point scalars (SA: `nu_tilde`, `nut`; SST:
+  `k`, `omega`, `nut`, `sst_f1`; k-ε: `k`, `epsilon`/`epsilon_tilde`, `nut`)
+  plus `wall_distance` and `yplus`, and `results/<case>.turb.var` next to
+  `results/<case>.var`.
+
+Restarting (`restart_opt = 1`) continues the turbulence from `<case>.turb.var`;
+if it is missing or does not match (model, fields, node count) the turbulence
+starts from free-stream values, e.g. to start a turbulent run from a laminar
+solution.
+
+Explicit time stepping: the turbulence diffusivity enters the diffusive time
+step limit, so turbulent runs take smaller time steps than laminar ones.
+For steady problems use local time stepping (`dtfixed = 0`, transient off).
+
+---
+
 ## Running a Simulation
 
 ### From the Case Directory
@@ -353,3 +440,5 @@ cd Hinterkante.dev.Re100
 | **504** | Pressure outlet ($p = 0.0$) |
 | **506** | Velocity symmetry / slip boundary ($\vec{u} \cdot \vec{n} = 0$) |
 | **507** | Backward Facing Step polynomial inflow profile ($v = 0.0$) |
+
+New code classifies these codes through `classify_boundary_flag()` (`include/BoundaryKind.hpp`): 500/501/502 → wall, 503/507 → inlet, 504 → outlet, 506 → symmetry, anything else → unknown.

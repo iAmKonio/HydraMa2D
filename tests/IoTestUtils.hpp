@@ -132,7 +132,8 @@ inline void copy_benchmark_case(const fs::path& dest) {
 }
 
 // Minimal parser for the legacy ASCII VTK unstructured grid written by
-// IO::write_vtk (points, triangles, point vectors "velocity", scalars "P").
+// IO::write_vtk (points, triangles, point vectors "velocity", scalars "P",
+// followed by any number of additional point scalars).
 struct VtkFile {
     std::vector<std::string> header; // first four lines
     int npoints = 0, ncells = 0, cells_size = 0, ntypes = 0, npointdata = 0;
@@ -142,6 +143,14 @@ struct VtkFile {
     std::vector<std::array<double, 3>> velocity;
     std::vector<double> pressure;
     std::string vectors_line, scalars_line, lookup_line;
+    // Additional "SCALARS <name> float 1" sections after P, in file order.
+    std::vector<std::pair<std::string, std::vector<double>>> extra_scalars;
+
+    const std::vector<double>* scalar(const std::string& name) const {
+        for (const auto& s : extra_scalars)
+            if (s.first == name) return &s.second;
+        return nullptr;
+    }
 };
 
 inline VtkFile parse_vtk(const fs::path& file) {
@@ -181,6 +190,20 @@ inline VtkFile parse_vtk(const fs::path& file) {
     v.pressure.resize(v.npointdata);
     for (auto& p : v.pressure) in >> p;
     if (!in) throw std::runtime_error("VTK: truncated file " + file.string());
+
+    while (in >> word) {
+        if (word != "SCALARS") throw std::runtime_error("VTK: expected SCALARS, got " + word);
+        std::string name, type;
+        int ncomp = 0;
+        in >> name >> type >> ncomp;
+        if (type != "float" || ncomp != 1) throw std::runtime_error("VTK: unsupported scalar section " + name);
+        expect("LOOKUP_TABLE");
+        in >> word; // "default"
+        std::vector<double> values(v.npointdata);
+        for (auto& x : values) in >> x;
+        if (!in) throw std::runtime_error("VTK: truncated scalar section " + name);
+        v.extra_scalars.emplace_back(name, std::move(values));
+    }
     return v;
 }
 

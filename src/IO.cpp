@@ -246,6 +246,15 @@ bool IO::read_solver(const std::string& filepath, SolverConfig& config) {
     return read_solver_options(lines, 10, filepath, config);
 }
 
+bool IO::read_turbulence(const std::string& filepath, TurbulenceConfig& config) {
+    std::string error;
+    if (!read_turbulence_config(filepath, config, error)) {
+        std::cerr << "ERROR: *.turbulence FILE HAS INVALID FORMAT: " << error << "\n";
+        return false;
+    }
+    return true;
+}
+
 bool IO::read_mesh(const std::string& filepath, Mesh& mesh) {
     std::ifstream in(filepath);
     if (!in.is_open()) {
@@ -486,6 +495,22 @@ bool IO::write_vtk(const std::string& filepath,
                    const std::vector<double>& u,
                    const std::vector<double>& v,
                    const std::vector<double>& p) {
+    return write_vtk(filepath, mesh, u, v, p, {});
+}
+
+bool IO::write_vtk(const std::string& filepath,
+                   const Mesh& mesh,
+                   const std::vector<double>& u,
+                   const std::vector<double>& v,
+                   const std::vector<double>& p,
+                   const std::vector<NamedField>& point_scalars) {
+    for (const NamedField& f : point_scalars) {
+        if (!f.values || static_cast<int>(f.values->size()) != mesh.npoin || f.name.empty() ||
+            f.name.find_first_of(" \t\r\n") != std::string::npos) {
+            std::cerr << "ERROR: INVALID VTK POINT FIELD '" << f.name << "'\n";
+            return false;
+        }
+    }
     std::ofstream out(filepath);
     if (!out.is_open()) {
         std::cerr << "ERROR: CANNOT OPEN VTK FILE FOR WRITING: " << filepath << "\n";
@@ -534,6 +559,109 @@ bool IO::write_vtk(const std::string& filepath,
         out << static_cast<float>(p[i]) << "\n";
     }
 
+    for (const NamedField& f : point_scalars) {
+        out << "SCALARS " << f.name << " float 1\n";
+        out << "LOOKUP_TABLE default\n";
+        for (int i = 0; i < mesh.npoin; ++i) {
+            out << static_cast<float>((*f.values)[i]) << "\n";
+        }
+    }
+
+    return true;
+}
+
+namespace {
+
+constexpr const char* kTurbulenceRestartMagic = "HydraMa2D-turbulence-restart";
+constexpr int kTurbulenceRestartVersion = 1;
+
+} // namespace
+
+bool IO::write_turbulence_restart(const std::string& filepath,
+                                  const std::string& model,
+                                  const std::vector<NamedField>& fields) {
+    if (fields.empty() || !fields[0].values) return false;
+    const std::size_t npoin = fields[0].values->size();
+    for (const NamedField& f : fields) {
+        if (!f.values || f.values->size() != npoin || f.name.empty() ||
+            f.name.find_first_of(" \t\r\n") != std::string::npos) {
+            return false;
+        }
+    }
+    std::ofstream out(filepath);
+    if (!out.is_open()) return false;
+
+    out << kTurbulenceRestartMagic << " " << kTurbulenceRestartVersion << "\n";
+    out << "model " << model << "\n";
+    out << "npoin " << npoin << "\n";
+    out << "fields " << fields.size();
+    for (const NamedField& f : fields) out << " " << f.name;
+    out << "\n";
+    out << std::scientific << std::setprecision(std::numeric_limits<double>::max_digits10 - 1);
+    for (std::size_t i = 0; i < npoin; ++i) {
+        for (std::size_t k = 0; k < fields.size(); ++k) {
+            if (k > 0) out << " ";
+            out << (*fields[k].values)[i];
+        }
+        out << "\n";
+    }
+    return static_cast<bool>(out);
+}
+
+bool IO::read_turbulence_restart(const std::string& filepath, int npoin,
+                                 TurbulenceRestartData& data, std::string& error) {
+    data = TurbulenceRestartData{};
+    std::ifstream in(filepath);
+    if (!in.is_open()) {
+        error = "cannot open " + filepath;
+        return false;
+    }
+    std::string magic, key;
+    int version = 0;
+    if (!(in >> magic >> version) || magic != kTurbulenceRestartMagic || version != kTurbulenceRestartVersion) {
+        error = "not a turbulence restart file (version " + std::to_string(kTurbulenceRestartVersion) + ")";
+        return false;
+    }
+    if (!(in >> key >> data.model) || key != "model") {
+        error = "missing model line";
+        return false;
+    }
+    long long file_npoin = -1;
+    if (!(in >> key >> file_npoin) || key != "npoin") {
+        error = "missing npoin line";
+        return false;
+    }
+    if (file_npoin != npoin) {
+        error = "file has " + std::to_string(file_npoin) + " nodes, mesh has " + std::to_string(npoin);
+        return false;
+    }
+    int nfields = 0;
+    if (!(in >> key >> nfields) || key != "fields" || nfields < 1 || nfields > 16) {
+        error = "missing or invalid fields line";
+        return false;
+    }
+    data.names.resize(nfields);
+    for (auto& name : data.names) {
+        if (!(in >> name)) {
+            error = "missing field name";
+            return false;
+        }
+    }
+    data.values.assign(nfields, std::vector<double>(npoin));
+    std::string token;
+    for (int i = 0; i < npoin; ++i) {
+        for (int k = 0; k < nfields; ++k) {
+            if (!(in >> token) || !parse_restart_double(token, data.values[k][i])) {
+                error = "invalid or missing value for node " + std::to_string(i + 1) + ", field " + data.names[k];
+                return false;
+            }
+        }
+    }
+    if (in >> token) {
+        error = "unexpected trailing data";
+        return false;
+    }
+    error.clear();
     return true;
 }
 

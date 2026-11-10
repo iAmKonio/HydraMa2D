@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 namespace hydrama {
 
@@ -85,11 +86,16 @@ PCGResult solve_pcg(const Mesh& mesh,
     return result;
 }
 
-void compute_timestep(int solver_opt, int dtfixed, int transient_on,
-                      double dtfix, double ani, double csafm,
-                      const Mesh& mesh,
-                      const std::vector<double>& velocity,
-                      std::vector<double>& delte) {
+namespace {
+
+// Shared implementation: re_half_of(ie) returns 0.5 / nu for element ie.
+template <typename ReHalf>
+void timestep_kernel(int solver_opt, int dtfixed, int transient_on,
+                     double dtfix, double csafm,
+                     const Mesh& mesh,
+                     const std::vector<double>& velocity,
+                     ReHalf re_half_of,
+                     std::vector<double>& delte) {
     delte.resize(mesh.nelem);
 
     if (dtfixed > 0) {
@@ -98,7 +104,6 @@ void compute_timestep(int solver_opt, int dtfixed, int transient_on,
     }
 
     double delte_min = std::numeric_limits<double>::max();
-    double re_half = 0.5 / ani; // 0.5 * Re
 
     for (int ie = 0; ie < mesh.nelem; ++ie) {
         double amin = mesh.alen_e[ie];
@@ -108,7 +113,7 @@ void compute_timestep(int solver_opt, int dtfixed, int transient_on,
         }
         if (velc < 1.0e-15) velc = 1.0e-15;
 
-        double dt_diff = csafm * amin * amin * re_half;
+        double dt_diff = csafm * amin * amin * re_half_of(ie);
         double dt_conv = csafm * amin / velc;
         delte[ie] = std::min(dt_diff, dt_conv);
         delte_min = std::min(delte_min, delte[ie]);
@@ -117,6 +122,30 @@ void compute_timestep(int solver_opt, int dtfixed, int transient_on,
     if (transient_on > 0 || solver_opt > 1 || dtfixed == -1) {
         delte.assign(mesh.nelem, delte_min);
     }
+}
+
+} // namespace
+
+void compute_timestep(int solver_opt, int dtfixed, int transient_on,
+                      double dtfix, double ani, double csafm,
+                      const Mesh& mesh,
+                      const std::vector<double>& velocity,
+                      std::vector<double>& delte) {
+    const double re_half = 0.5 / ani; // 0.5 * Re
+    timestep_kernel(solver_opt, dtfixed, transient_on, dtfix, csafm, mesh, velocity,
+                    [re_half](int) { return re_half; }, delte);
+}
+
+void compute_timestep(int solver_opt, int dtfixed, int transient_on,
+                      double dtfix, const std::vector<double>& nu_eff_elem, double csafm,
+                      const Mesh& mesh,
+                      const std::vector<double>& velocity,
+                      std::vector<double>& delte) {
+    if (static_cast<int>(nu_eff_elem.size()) != mesh.nelem) {
+        throw std::invalid_argument("compute_timestep: nu_eff_elem must have one value per element");
+    }
+    timestep_kernel(solver_opt, dtfixed, transient_on, dtfix, csafm, mesh, velocity,
+                    [&nu_eff_elem](int ie) { return 0.5 / nu_eff_elem[ie]; }, delte);
 }
 
 } // namespace hydrama

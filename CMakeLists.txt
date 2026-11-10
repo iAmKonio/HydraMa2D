@@ -47,6 +47,20 @@ add_library(hydrama2d_core STATIC
     src/linalg/SparsityPattern.cpp
     src/linalg/SsorPreconditioner.cpp
     src/linalg/VectorOps.cpp
+    src/geometry/FieldOps.cpp
+    src/geometry/SegmentTree.cpp
+    src/geometry/WallDistance.cpp
+    src/geometry/WallGeometry.cpp
+    src/numerics/PointImplicit.cpp
+    src/numerics/ScalarTransport.cpp
+    src/turbulence/SpalartAllmaras.cpp
+    src/turbulence/TurbulenceBC.cpp
+    src/turbulence/TurbulenceConfig.cpp
+    src/turbulence/KEpsilon.cpp
+    src/turbulence/KOmegaSST.cpp
+    src/turbulence/TurbulenceFactory.cpp
+    src/turbulence/WallFunctions.cpp
+    src/turbulence/WallUnits.cpp
 )
 target_include_directories(hydrama2d_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(hydrama2d_core PUBLIC cxx_std_17)

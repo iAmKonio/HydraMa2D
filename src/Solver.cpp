@@ -3,16 +3,25 @@
 #include "Step1.hpp"
 #include "Step2.hpp"
 #include "Step3.hpp"
+#include "turbulence/TurbulenceFactory.hpp"
+#include "turbulence/WallUnits.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <iomanip>
 #include <cmath>
 #include <chrono>
 #include <filesystem>
+#include <sstream>
+#include <stdexcept>
 
 namespace hydrama {
 
 Solver::Solver(SimulationConfig config) : config_(std::move(config)) {}
+
+void Solver::set_turbulence_model(std::unique_ptr<TurbulenceModel> model) {
+    turbulence_ = std::move(model);
+}
 
 bool Solver::initialize() {
     std::string prefix = config_.case_dir.empty() ? "" : (config_.case_dir + "/");
@@ -29,6 +38,19 @@ bool Solver::initialize() {
     }
     if (!IO::read_solver(prefix + "system/" + config_.casename + ".solver", config_.solver)) {
         return false;
+    }
+
+    // Optional turbulence configuration (missing file: laminar)
+    if (!IO::read_turbulence(prefix + "system/" + config_.casename + ".turbulence", turbulence_config_)) {
+        return false;
+    }
+    if (!turbulence_) {
+        try {
+            turbulence_ = make_turbulence_model(turbulence_config_);
+        } catch (const std::invalid_argument& e) {
+            std::cerr << "ERROR: " << e.what() << "\n";
+            return false;
+        }
     }
 
     // Read mesh and boundary definitions
@@ -76,9 +98,11 @@ bool Solver::initialize() {
     std::cout << "Pressure solver: " << pressure_solver_->description() << "\n";
 
     // Check for restart file
+    bool restarted = false;
     std::string restart_file = prefix + "results/" + config_.casename + ".var";
     if (config_.control.restart_opt > 0) {
         if (IO::read_restart(restart_file, rtime_, istart_, u_, v_, p_)) {
+            restarted = true;
             std::cout << "Restarting using previously calculated values\n";
             istart_ += 1;
             for (int ip = 0; ip < npoin; ++ip) {
@@ -103,7 +127,96 @@ bool Solver::initialize() {
     pdiag_.resize(npoin);
     gstif_.resize(mesh_.nelem);
 
+    if (turbulence_ && !initialize_turbulence(prefix, restarted)) {
+        return false;
+    }
+
     return true;
+}
+
+TurbulenceContext Solver::turbulence_context() const {
+    return TurbulenceContext{mesh_, walls_, ani_, delte_, elcoe2_};
+}
+
+bool Solver::initialize_turbulence(const std::string& prefix, bool restarted) {
+    try {
+        walls_ = WallGeometry(mesh_, *make_wall_distance_calculator(turbulence_config_.wall_distance));
+    } catch (const std::invalid_argument& e) {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        return false;
+    }
+    const TurbulenceContext ctx = turbulence_context();
+    turbulence_->initialize(ctx, {u_, v_});
+    nu_eff_elem_.assign(mesh_.nelem, ani_);
+
+    std::cout << "Turbulence model: " << turbulence_->name() << "\n";
+    std::cout << "Wall faces: " << walls_.num_faces() << ", wall nodes: " << walls_.num_wall_nodes();
+    if (walls_.has_walls()) {
+        const auto& d = walls_.wall_distance();
+        std::cout << ", max wall distance: " << *std::max_element(d.begin(), d.end());
+    }
+    std::cout << "\n";
+
+    // Turbulence restart: continue from results/<case>.turb.var when the flow
+    // was restarted; otherwise (or if it does not match) start from the
+    // free-stream values, e.g. a turbulent run started from a laminar solution.
+    if (restarted) {
+        const std::string path = prefix + "results/" + config_.casename + ".turb.var";
+        TurbulenceRestartData data;
+        std::string error;
+        std::vector<FieldRef> state = turbulence_->state_fields();
+        bool ok = IO::read_turbulence_restart(path, mesh_.npoin, data, error);
+        if (ok && data.model != turbulence_->name()) {
+            ok = false;
+            error = "file is for model '" + data.model + "'";
+        }
+        if (ok && data.names.size() != state.size()) {
+            ok = false;
+            error = "field count does not match the model";
+        }
+        for (std::size_t k = 0; ok && k < state.size(); ++k) {
+            if (data.names[k] != state[k].name) {
+                ok = false;
+                error = "field '" + data.names[k] + "' does not match '" + state[k].name + "'";
+            }
+        }
+        if (ok) {
+            for (std::size_t k = 0; k < state.size(); ++k) *state[k].values = data.values[k];
+            turbulence_->refresh(ctx);
+            std::cout << "Restarting turbulence from " << path << "\n";
+        } else {
+            std::cout << "WARNING: Turbulence restart not used (" << error
+                      << "). Turbulence starts from free-stream values.\n";
+        }
+    }
+    return true;
+}
+
+void Solver::update_effective_viscosity() {
+    const std::vector<double>& nut = turbulence_->nut_elem();
+    const std::vector<double>& gamma = turbulence_->max_diffusivity_elem();
+    for (int ie = 0; ie < mesh_.nelem; ++ie) {
+        nu_eff_elem_[ie] = std::max(ani_ + nut[ie], gamma[ie]);
+    }
+}
+
+double Solver::max_turbulence_residual() const {
+    double r = 0.0;
+    for (const auto& e : turbulence_->residuals()) r = std::max(r, e.relative_change);
+    return r;
+}
+
+std::string Solver::turbulence_log_line() const {
+    std::ostringstream os;
+    os << std::scientific << std::setprecision(6) << " Turbulence:";
+    for (const auto& e : turbulence_->residuals()) os << " " << e.name << " change " << e.relative_change;
+    const std::vector<double>& nut = turbulence_->nut();
+    os << "  nut/nu max " << *std::max_element(nut.begin(), nut.end()) / ani_;
+    if (walls_.has_walls()) {
+        const WallUnitStats y = first_cell_yplus(walls_, wall_friction_velocity(mesh_, walls_, u_, v_, ani_), ani_);
+        os << "  y+ (first cell) min " << y.min << " mean " << y.mean << " max " << y.max;
+    }
+    return os.str();
 }
 
 void Solver::output_results(int iitime, double time_val) {
@@ -117,10 +230,33 @@ void Solver::output_results(int iitime, double time_val) {
     }
 
     std::string vtk_path = prefix + "results/" + config_.casename + "_" + time_str + ".vtk";
-    IO::write_vtk(vtk_path, mesh_, u_, v_, p_);
-
     std::string restart_path = prefix + "results/" + config_.casename + ".var";
+
+    if (!turbulence_) {
+        IO::write_vtk(vtk_path, mesh_, u_, v_, p_);
+        IO::write_restart(restart_path, time_val, iitime, config_.control.transient_on, u_, v_, p_);
+        return;
+    }
+
+    // Turbulent run: model fields (transported variables, nut), wall distance
+    // and y+ as additional VTK point scalars, plus the turbulence restart file.
+    std::vector<NamedField> scalars;
+    for (const FieldRef& f : turbulence_->fields()) scalars.push_back({f.name, f.values});
+    std::vector<double> yplus;
+    if (walls_.has_walls()) {
+        yplus_field(walls_, wall_friction_velocity(mesh_, walls_, u_, v_, ani_), ani_, yplus);
+        scalars.push_back({"wall_distance", &walls_.wall_distance()});
+        scalars.push_back({"yplus", &yplus});
+    }
+    IO::write_vtk(vtk_path, mesh_, u_, v_, p_, scalars);
     IO::write_restart(restart_path, time_val, iitime, config_.control.transient_on, u_, v_, p_);
+
+    std::vector<NamedField> state;
+    for (const FieldRef& f : turbulence_->state_fields()) state.push_back({f.name, f.values});
+    const std::string turb_path = prefix + "results/" + config_.casename + ".turb.var";
+    if (!IO::write_turbulence_restart(turb_path, std::string(turbulence_->name()), state)) {
+        std::cerr << "ERROR: CANNOT WRITE TURBULENCE RESTART FILE: " << turb_path << "\n";
+    }
 }
 
 void Solver::run() {
@@ -141,15 +277,29 @@ void Solver::run() {
         p_old_ = p_;
 
         // Calculate time step size
-        compute_timestep(config_.solver.solver_opt,
-                         config_.control.dtfixed,
-                         config_.control.transient_on,
-                         config_.control.dtfix,
-                         ani_,
-                         config_.control.csafm,
-                         mesh_,
-                         velocity_,
-                         delte_);
+        if (turbulence_) {
+            // Diffusive limit with nu_eff = max(nu + nu_t, turbulence diffusivities).
+            update_effective_viscosity();
+            compute_timestep(config_.solver.solver_opt,
+                             config_.control.dtfixed,
+                             config_.control.transient_on,
+                             config_.control.dtfix,
+                             nu_eff_elem_,
+                             config_.control.csafm,
+                             mesh_,
+                             velocity_,
+                             delte_);
+        } else {
+            compute_timestep(config_.solver.solver_opt,
+                             config_.control.dtfixed,
+                             config_.control.transient_on,
+                             config_.control.dtfix,
+                             ani_,
+                             config_.control.csafm,
+                             mesh_,
+                             velocity_,
+                             delte_);
+        }
 
         if (config_.control.transient_on > 0) {
             rtime_ += delte_[0];
@@ -162,7 +312,11 @@ void Solver::run() {
         // ==========================================
         // Step 1: Intermediate Velocity Calculation
         // ==========================================
-        compute_step1(mesh_, ani_, delte_, u_, v_, rhs_u_, rhs_v_);
+        if (turbulence_) {
+            compute_step1(mesh_, ani_, turbulence_->nut_elem(), delte_, u_, v_, rhs_u_, rhs_v_);
+        } else {
+            compute_step1(mesh_, ani_, delte_, u_, v_, rhs_u_, rhs_v_);
+        }
 
         for (int ip = 0; ip < mesh_.npoin; ++ip) {
             u_[ip] += rhs_u_[ip] * elcoe2_[ip];
@@ -198,6 +352,13 @@ void Solver::run() {
         apply_symmetry_bc(mesh_, u_, v_);
         apply_velocity_bcs(mesh_, u_, v_);
 
+        // ==========================================
+        // Turbulence: advance with u^{n+1}, update nu_t
+        // ==========================================
+        if (turbulence_) {
+            turbulence_->advance(turbulence_context(), {u_, v_});
+        }
+
         // Update Velocity Magnitude
         velocity_old_ = velocity_;
         for (int ip = 0; ip < mesh_.npoin; ++ip) {
@@ -227,8 +388,15 @@ void Solver::run() {
                           << pcg_res.reference_residual
                           << " Final residual = " << pcg_res.final_residual
                           << " Iter: " << pcg_res.iterations << "\n";
+                if (turbulence_) {
+                    std::cout << turbulence_log_line() << "\n";
+                }
 
-                if (config_.control.vel_check > 0 && hb1 < config_.control.l2norm_vel_tolerance) {
+                // Turbulent runs also require converged turbulence equations.
+                const bool turbulence_converged =
+                    !turbulence_ || max_turbulence_residual() < config_.control.l2norm_vel_tolerance;
+                if (config_.control.vel_check > 0 && hb1 < config_.control.l2norm_vel_tolerance &&
+                    turbulence_converged) {
                     break;
                 }
             }
@@ -242,6 +410,9 @@ void Solver::run() {
                           << " Iter: " << std::setw(6) << pcg_res.iterations
                           << " IterCumulative: " << std::setw(9) << iiter_total_ << "\n";
                 std::cout << " Time: " << std::setprecision(16) << std::scientific << rtime_ << "\n";
+                if (turbulence_) {
+                    std::cout << turbulence_log_line() << "\n";
+                }
             }
         }
 

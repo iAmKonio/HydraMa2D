@@ -23,4 +23,5 @@ fort.*
 # Simulation outputs (preserve results directory with .gitkeep)
 **/results/*.vtk
 **/results/*.var
+**/results/*.turb.var
 !**/results/.gitkeep

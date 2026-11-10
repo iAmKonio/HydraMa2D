@@ -65,6 +65,19 @@ add_executable(hydrama2d_tests
     test_linalg_gmres.cpp
     test_linalg_nonsymmetric.cpp
     test_setup_reuse.cpp
+    test_boundary_kind.cpp
+    test_wall_geometry.cpp
+    test_wall_distance.cpp
+    test_turbulence_config.cpp
+    test_field_ops.cpp
+    test_scalar_transport.cpp
+    test_spalart_allmaras.cpp
+    test_turbulent_coupling.cpp
+    test_wall_units.cpp
+    test_turbulence_io.cpp
+    test_solver_turbulence.cpp
+    test_k_omega_sst.cpp
+    test_k_epsilon.cpp
 )
 target_link_libraries(hydrama2d_tests PRIVATE hydrama2d_core Catch2::Catch2WithMain)
 target_compile_options(hydrama2d_tests PRIVATE ${HYDRAMA2D_COMPILE_OPTIONS})

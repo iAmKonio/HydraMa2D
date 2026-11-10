@@ -50,4 +50,15 @@ void compute_timestep(int solver_opt, int dtfixed, int transient_on,
                       const std::vector<double>& velocity,
                       std::vector<double>& delte);
 
+// Same, with an effective diffusivity per element in the diffusive limit,
+// dt_diff,e = csafm * h_e^2 / (2 nu_eff,e). With turbulence, nu_eff,e is
+// max(nu + nu_t,e, largest diffusivity of the turbulence equations in e).
+// For nu_eff,e == ani in every element the result is bit-identical to the
+// overload above.
+void compute_timestep(int solver_opt, int dtfixed, int transient_on,
+                      double dtfix, const std::vector<double>& nu_eff_elem, double csafm,
+                      const Mesh& mesh,
+                      const std::vector<double>& velocity,
+                      std::vector<double>& delte);
+
 } // namespace hydrama
