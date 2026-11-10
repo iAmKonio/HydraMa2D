@@ -11,6 +11,7 @@
   - **Step 2:** Semi-implicit pressure Poisson solve enforcing mass conservation and avoiding pressure-velocity decoupling without violating the LBB condition.
   - **Step 3:** Explicit velocity correction with pressure gradient and CBS pressure stabilization.
 - **Element-By-Element (EBE) PCG Solver:** Matrix-free Jacobi Preconditioned Conjugate Gradient solver requiring only $O(N_{\text{elem}} + N_{\text{poin}})$ memory with no global sparse matrix assembly.
+- **Extensible linear solver layer (`hydrama::linalg`):** CG, BiCGSTAB and restarted GMRES(m); matrix-free (EBE) or assembled (CSR) operators; Jacobi / SSOR / IC(0) / ILU(0) preconditioners with reverse Cuthill-McKee reordering, all selectable in `<case>.solver` (see [Linear Solver Architecture](#linear-solver-architecture)).
 - **Adaptive Timestepping:** Automatic computation of local and global time steps constrained by convective CFL and diffusive stability limits.
 - **Case Structure:** OpenFOAM-style directory structure (`constant/`, `system/`, `results/`).
 - **Standard Outputs:**
@@ -26,12 +27,47 @@ HydraMa.dev/
 ├── CMakeLists.txt                # CMake build configuration
 ├── Makefile                      # Make build configuration
 ├── README.md                     # Documentation
+├── docs/
+│   ├── LINEAR_SOLVER_REFERENCES.md  # Literature behind the linear solver algorithms
+│   └── REVIEWER_GUIDE.md            # Build, test, sanitizer and benchmark instructions
+├── tools/
+│   └── benchmark.sh              # Reproducible benchmark of the solver configurations
 ├── include/                      # C++ Header files
 │   ├── BoundaryConditions.hpp
 │   ├── Config.hpp
 │   ├── IO.hpp
-│   ├── LinearSolver.hpp
+│   ├── LinearSolver.hpp          # EBE assembly/mat-vec, legacy solve_pcg() adapter, time step
 │   ├── Mesh.hpp
+│   ├── PressureSolver.hpp        # Facade: pressure Poisson solve used by the time loop
+│   ├── linalg/                   # Linear algebra layer (namespace hydrama::linalg)
+│   │   ├── Linalg.hpp            # Umbrella header
+│   │   ├── VectorView.hpp        # Non-owning vector views
+│   │   ├── VectorOps.hpp         # Deterministic vector kernels
+│   │   ├── LinearOperator.hpp    # Operator interface
+│   │   ├── EbeOperator.hpp       # Matrix-free element-by-element operator
+│   │   ├── SparsityPattern.hpp   # Shared CSR structure
+│   │   ├── CsrMatrix.hpp         # Assembled CSR operator, constrain()
+│   │   ├── CsrAssembly.hpp       # P1 element-to-CSR assembly (pattern + scatter map)
+│   │   ├── Permutation.hpp       # Permutations, symmetric permutation P A P^T
+│   │   ├── Reordering.hpp        # (Reverse) Cuthill-McKee
+│   │   ├── ConstrainedOperator.hpp  # Dirichlet decorator
+│   │   ├── DirichletConstraints.hpp
+│   │   ├── Preconditioner.hpp    # Preconditioner interface
+│   │   ├── IdentityPreconditioner.hpp
+│   │   ├── JacobiPreconditioner.hpp
+│   │   ├── SsorPreconditioner.hpp
+│   │   ├── IncompleteCholesky.hpp   # IC(0)
+│   │   ├── IncompleteLU.hpp         # ILU(0)
+│   │   ├── DiagonalShift.hpp        # Breakdown shift policy of IC(0)/ILU(0)
+│   │   ├── ReorderedPreconditioner.hpp  # Preconditioner in another numbering
+│   │   ├── ScaledPreconditioner.hpp     # (1/c) M^{-1}: setup reuse for scaled operators
+│   │   ├── Factory.hpp           # Name-based creation (catalogues)
+│   │   ├── KrylovSolver.hpp      # Krylov base class (common solve driver)
+│   │   ├── ConjugateGradient.hpp
+│   │   ├── BiCGStab.hpp          # BiCGSTAB (non-symmetric systems)
+│   │   ├── Gmres.hpp             # Restarted GMRES(m), Arnoldi + Givens QR
+│   │   ├── Convergence.hpp       # Criteria, stop reasons, results, convergence control
+│   │   └── IterationMonitor.hpp  # Solve observers
 │   ├── Solver.hpp
 │   ├── Step1.hpp
 │   ├── Step2.hpp
@@ -41,6 +77,8 @@ HydraMa.dev/
 │   ├── IO.cpp
 │   ├── LinearSolver.cpp
 │   ├── Mesh.cpp
+│   ├── PressureSolver.cpp
+│   ├── linalg/                   # Implementations of include/linalg/*
 │   ├── Solver.cpp
 │   ├── Step1.cpp
 │   ├── Step2.cpp
@@ -50,6 +88,8 @@ HydraMa.dev/
 │   ├── CMakeLists.txt
 │   ├── MeshTestUtils.hpp         # Test mesh builders (triangles, structured grids)
 │   ├── LinearSolverTestUtils.hpp # Dense-matrix helpers (reference assembly, direct solve)
+│   ├── LinalgTestUtils.hpp       # Test doubles for the linalg interfaces (dense/counting operators, ...)
+│   ├── reference/LegacyPcg.hpp   # Frozen copy of the original PCG (bit-for-bit reference)
 │   ├── IoTestUtils.hpp           # Temp dirs, stdout capture, case copy, VTK parser
 │   ├── test_mesh_area.cpp
 │   ├── test_mesh_shape_functions.cpp
@@ -68,7 +108,23 @@ HydraMa.dev/
 │   ├── test_step3.cpp
 │   ├── test_velocity_bc.cpp
 │   ├── test_io.cpp
-│   └── test_solver_regression.cpp # End-to-end runs of the benchmark case
+│   ├── test_solver_regression.cpp # End-to-end runs of the benchmark case
+│   ├── test_linalg_vector.cpp
+│   ├── test_linalg_interfaces.cpp
+│   ├── test_linalg_convergence.cpp
+│   ├── test_linalg_monitor.cpp
+│   ├── test_linalg_cg.cpp
+│   ├── test_linalg_csr.cpp
+│   ├── test_linalg_assembly.cpp
+│   ├── test_linalg_reordering.cpp
+│   ├── test_linalg_assembled_preconditioners.cpp
+│   ├── test_linalg_factory.cpp
+│   ├── test_solver_config.cpp
+│   ├── test_linalg_bicgstab.cpp
+│   ├── test_linalg_gmres.cpp
+│   ├── test_linalg_nonsymmetric.cpp
+│   ├── test_setup_reuse.cpp
+│   └── test_pressure_solver.cpp
 └── Hinterkante.dev.Re100/        # Example benchmark case (Backward-facing step, Re=200)
     ├── constant/
     │   ├── hinterkante.mesh      # Mesh topology & coordinates
@@ -76,7 +132,7 @@ HydraMa.dev/
     ├── system/
     │   ├── hinterkante.control   # Timestepping, iterations, tolerances
     │   ├── hinterkante.physical  # Reynolds number & pressure reference node
-    │   └── hinterkante.solver    # PCG linear solver tolerances
+    │   └── hinterkante.solver    # Pressure solver tolerances and options
     └── results/                  # Generated VTK files and restart data
 ```
 
@@ -131,6 +187,14 @@ Each test case is registered as a separate CTest test with a 120 s timeout, so a
 cmake -S . -B build -DFETCHCONTENT_SOURCE_DIR_CATCH2=/path/to/Catch2
 ```
 
+Without network access to GitHub, the Catch2 v3.4.0 binary package of Ubuntu 24.04 can also be unpacked into a user prefix (no root needed):
+
+```bash
+curl -O http://archive.ubuntu.com/ubuntu/pool/universe/c/catch2/catch2_3.4.0-1build1_amd64.deb
+dpkg-deb -x catch2_3.4.0-1build1_amd64.deb /tmp/catch2 && mkdir -p ~/.local/catch2-3.4.0 && cp -r /tmp/catch2/usr/* ~/.local/catch2-3.4.0/
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=$HOME/.local/catch2-3.4.0
+```
+
 **Useful commands:**
 
 ```bash
@@ -161,11 +225,103 @@ ctest --test-dir build -R "[Nn]ormal"        # run tests whose name matches a (c
 | `[symmetry]` | `apply_symmetry_bc` | normal component removed, tangential kept, flag selection, corners |
 | `[velocity_bc]` | `apply_velocity_bcs` | uniform inflow, step inflow profile, no-slip walls, precedence at corners |
 | `[io]` | `IO::*` | Fortran number parsing, config/mesh/flag readers, mesh id validation, bit-exact restart and VTK round trips, error handling |
-| `[solver]` | `Solver` | 10-step benchmark runs: finite, bounded, converged PCG, BCs, determinism, reference values, bit-for-bit restart, steady mode |
+| `[linalg][vector]` | `linalg::Span`, `VectorOps` | views and const-correctness, kernel values, size checks, aliasing, sequential (reproducible) reductions |
+| `[linalg][operator]` | `EbeOperator`, `ConstrainedOperator`, `LinearOperator` | bit-for-bit equal to the original mat-vec, dense reference, diagonal, symmetry, live view of coefficients, Dirichlet rows, input validation |
+| `[linalg][constraints]` | `DirichletConstraints` | impose / zero / mask, duplicates, validation |
+| `[linalg][preconditioner]` | `IdentityPreconditioner`, `JacobiPreconditioner` | inverse diagonal incl. zero guard, pointwise scaling, set-up checks, `update()` default |
+| `[linalg][convergence]` | `ConvergenceControl` | every stopping rule with scripted residuals: reference modes (initial / rhs / first iteration), strictness, order, exact solution, cap, non-finite |
+| `[linalg][monitor]` | `IterationMonitor`s | residual history, notification order, stream output, groups, observing never changes results |
+| `[linalg][cg]` | `ConjugateGradient`, `solve_pcg` | bit-for-bit equal to the frozen original PCG (`[legacy]`), fused = generic path, one mat-vec/preconditioner per iteration, direct-solve agreement, user-defined operators/preconditioners, finite termination, breakdown, NaN, cap, validation, reuse |
+| `[linalg][csr]` | `SparsityPattern`, `CsrMatrix`, `constrain()` | validation, queries, bandwidth/profile, triplets, product vs. dense, rectangular, symmetry, constrained matrix |
+| `[linalg][assembly]` | `P1CsrAssembler` | pattern = mesh node graph (brute force), scatter map, entries bit-identical to the EBE operator, products vs. EBE and dense reference, generic element assembly, re-assembly, benchmark mesh |
+| `[linalg][reordering]` | `Permutation`, `SymmetricPermutation`, (R)CM | P A P^T, plans, scrambled paths/grids, pseudo-peripheral nodes, disconnected graphs, non-symmetric patterns, Liu-Sherman property, benchmark mesh |
+| `[linalg][preconditioner]` | SSOR, IC(0), ILU(0), `ReorderedPreconditioner` | closed-form SSOR, `(LU)_ij = a_ij` on the pattern, exactness without fill-in, Kershaw breakdown + shift, ILU(0) = IC(0) for SPD, symmetry/definiteness, structure reuse, CG agreement with dense solves, quality on the benchmark mesh |
+| `[linalg][factory]` | `make_preconditioner`, `make_krylov_solver` | catalogues, options, orderings, errors |
+| `[linalg][bicgstab]` | `BiCGStab` | direct-solve agreement on upwind/central convection-diffusion with none / Jacobi / ILU(0) / RCM+ILU(0); true reported residual; one step with exact preconditioner or eigenvector rhs; termination within #distinct eigenvalues; pivot, stagnation (ω) and Lanczos (ρ) breakdowns on symbolically constructed systems; work per iteration; stagnation at the attainable accuracy |
+| `[linalg][gmres]` | `Gmres` | direct-solve agreement (schemes × preconditioners × restart × MGS/CGS2); minimal residual over the Krylov space vs. dense least squares; monotone history across restarts; finite termination; happy breakdown; full ≤ restarted iterations; GMRES(1) on positive-real matrices; singular systems; work per iteration; cap, NaN, constraints, options |
+| `[reuse]` | `ScaledPreconditioner`, `uniform_scaling`, `PressureSolver` | homogeneity `M(cA)^{-1} = (1/c) M(A)^{-1}` of every preconditioner (also with the IC(0) shift), detection of `A = c A_ref`, one numeric setup per uniform-dt sequence, bit-identical results for constant dt, new setup for local dt / geometry changes, new structure for a new mesh, orderings once per structure, `preconditioner_reuse` option, run-log statistics |
+| `[linalg][nonsymmetric]` | BiCGSTAB, GMRES | error vs. direct solution as the tolerance tightens; convergence rates ILU(0) < Jacobi < 1; ILU(0) for strong convection; CG / BiCGSTAB / GMRES agree on an SPD system |
+| `[solver_options]` | `IO::read_solver`, `pressure_criteria` | optional `key = value` settings, comments/free text, every invalid input, derived criteria |
+| `[pressure_solver]` | `PressureSolver` | bit-for-bit equal to the original PCG over multi-step sequences (global and local dt), legacy configuration, binding/re-binding, monitor; all configurations converge to the same pressure, composition, pattern/ordering built once per mesh |
+| `[solver]` | `Solver` | 10-step benchmark runs: finite, bounded, converged PCG, BCs, determinism, reference values, bit-for-bit restart, steady mode; every linear solver configuration reproduces the converged reference values (`[configurations]`) |
 
 The `[solver][regression]` tests compare against reference values recorded on Linux/x86-64 (GCC). Values from the bundled configuration are checked with a platform-robust tolerance (1e-3, velocity and time only), because its loose PCG tolerance makes the pressure sensitive to round-off differences between compilers/CPUs (~1 %). A variant with a converged PCG is checked tightly (1e-7). If a deliberate change to the numerics alters these values, update the reference values in `tests/test_solver_regression.cpp`.
 
 Tests tagged **`[characterization]`** pin down *current* behaviour that is questionable (clockwise elements, trailing edge classification of open wall segments, undocumented `dtfixed` values, PCG initial-residual reporting and iteration cap, order-dependent symmetry projection at kinks, non-zero step-profile wall values, lenient/throwing config parsing, restart files from a larger mesh). They are not statements of intended behaviour: if that behaviour is deliberately changed, update these tests accordingly.
+
+---
+
+## Linear Solver Architecture
+
+The pressure Poisson equation (CBS Step 2) is solved through a small linear algebra layer, `hydrama::linalg` (`include/linalg/`, `src/linalg/`), designed so that new Krylov methods, preconditioners and matrix formats can be added without touching the CFD code:
+
+| Component | Role | Pattern |
+| :--- | :--- | :--- |
+| `LinearOperator` | `y = A x`; `EbeOperator` (matrix-free, element-by-element), `CsrMatrix` (assembled); capability query `assembled()` | Strategy |
+| `SparsityPattern` / `P1CsrAssembler` | shared CSR structure of the P1 node graph; element scatter map for O(nelem) re-assembly | |
+| `ConstrainedOperator` / `constrain()` | Dirichlet rows removed (`P A`), resp. the matrix `P A P + (I - P)` for assembled preconditioners | Decorator |
+| `Permutation` / `reverse_cuthill_mckee()` | bandwidth/profile reducing orderings, `P A P^T` plans | |
+| `Preconditioner` | `z = M^{-1} r`; `Identity`, `Jacobi`, `SsorPreconditioner`, `IncompleteCholesky` (IC(0)), `IncompleteLU` (ILU(0)) | Strategy |
+| `ReorderedPreconditioner` | builds any assembled preconditioner in another numbering (RCM) | Decorator |
+| `ScaledPreconditioner` | `(1/c) M(A_ref)^{-1}` for `A = c A_ref`: setup reuse under uniform time stepping | Decorator |
+| `make_preconditioner` / `make_krylov_solver` | name-based creation; catalogues validate configuration files | Factory |
+| `KrylovSolver` | non-virtual `solve()`: validation, Dirichlet lifting, `r_0`, convergence control; methods implement `iterate()`: `ConjugateGradient` (SPD), `BiCGStab`, `Gmres` (general systems, right-preconditioned) | Template Method |
+| `ConvergenceCriteria` / `ConvergenceControl` | one implementation of the stopping rules for all methods; `SolveResult` with `converged` flag and `StopReason`; `StagnationGuard` against false-convergence loops at the attainable accuracy | |
+| `IterationMonitor` | `ResidualHistory`, `StreamMonitor`, `MonitorGroup` | Observer / Composite |
+| `PressureSolver` | what `Solver::run()` calls: `update(...)` after `update_lhs()`, then `solve(rhs, p)` | Facade |
+
+Design rules: one virtual call per O(n) operation; solver objects keep their work vectors between time steps (no allocation per solve); all reductions are sequential and index-ordered, so results are reproducible bit for bit; a pointwise preconditioner (Jacobi) is fused into the CG update loop.
+
+Algorithms and literature: see [docs/LINEAR_SOLVER_REFERENCES.md](docs/LINEAR_SOLVER_REFERENCES.md). Build/test/sanitizer/benchmark instructions for reviewers: [docs/REVIEWER_GUIDE.md](docs/REVIEWER_GUIDE.md).
+
+### Pressure solver options (`system/<case>.solver`)
+
+After the ten positional lines, optional settings can be given as `key = value` lines (a line is a setting only if it starts with an identifier followed by `=`; `#` and `!` start comments; unknown keys, invalid values and duplicates are errors):
+
+| Key | Values (default first) | Meaning |
+| :--- | :--- | :--- |
+| `method` | `cg`, `bicgstab`, `gmres` | Krylov method: CG for SPD systems (the pressure equation); BiCGSTAB / GMRES(m) for general systems |
+| `preconditioner` | `jacobi`, `none`, `ssor`, `ic0`, `ilu0` | `ssor`/`ic0`/`ilu0` are built from the assembled, Dirichlet-constrained matrix |
+| `operator_format` | `ebe`, `csr` | matrix-free element-by-element or assembled CSR operator in the Krylov iteration |
+| `reordering` | `none`, `rcm` | reverse Cuthill-McKee numbering for `ssor`/`ic0`/`ilu0` |
+| `max_iterations` | `100000` | iteration cap |
+| `residual_reference` | automatic | `first_iteration` (legacy), `initial` (‖r₀‖) or `rhs` (‖b‖); automatic = `first_iteration` for the legacy PCG, `initial` otherwise |
+| `ssor_omega` | `1.0` | SSOR relaxation, `0 < ω < 2` (1 = symmetric Gauss-Seidel) |
+| `diagonal_shift` | `0.0` | initial shift α of IC(0)/ILU(0) (`A + α diag(A)`; raised automatically on breakdown) |
+| `preconditioner_reuse` | `rescale`, `rebuild` | setup reuse for `ssor`/`ic0`/`ilu0` (see below); `rebuild` refactorises every time step |
+| `gmres_restart` | `30` | restart length m of GMRES(m) |
+| `gmres_orthogonalization` | `mgs`, `cgs2` | Arnoldi orthogonalisation: modified Gram-Schmidt or classical Gram-Schmidt twice |
+
+Example (fastest configuration on the benchmark case):
+
+```
+preconditioner = ic0
+reordering     = rcm
+```
+
+**Setup reuse (`preconditioner_reuse = rescale`, default).** With global/uniform time stepping the pressure matrix is `A = dt K` with a constant `K`, and every preconditioner of the suite is homogeneous: `M(c A) = c M(A)`. The sparsity pattern, element scatter map and RCM ordering are built once per mesh. The numeric factorisation (IC(0)/ILU(0)/SSOR) is computed once and then reused as `(1/c) M(A_ref)^{-1}`. Each update checks the element data (`gstif`, `pdiag`) against the data of the last factorisation: if `A = c A_ref` entrywise to 1e-12, the factorisation is rescaled, otherwise (local time steps, changed geometry) it is rebuilt, and a new mesh also rebuilds pattern and ordering. The run log reports the work done, e.g. ` Pressure solver setup: 1 numeric setups, 199 rescaled reuses, 1 structure builds`. Jacobi (O(n) setup) and the legacy path are always set up from the current values.
+
+Benchmarks (bundled case, 200 steps, Linux/x86-64, GCC 13, `-O3`; `tools/benchmark.sh --suite --repeats 7`, best wall time of the whole run; run-to-run noise on the measurement machine was about ±0.1 s):
+
+| Configuration | Wall time | Pressure iterations | Setup work |
+| :--- | :--- | :--- | :--- |
+| `jacobi` (legacy, default) | 2.55 s | 16113 | – |
+| `ssor` + `rcm`, rebuild | 1.74 s | 3598 | 200 numeric setups |
+| `ssor` + `rcm`, rescale | 1.63 s | 3598 | 1 numeric setup, 199 rescaled |
+| `ic0` + `rcm`, rebuild | 1.50 s | 2710 | 200 numeric setups |
+| `ic0` + `rcm`, rescale | 1.23 s | 2820 | 1 numeric setup, 199 rescaled |
+| `ilu0` + `rcm`, rebuild | 1.56 s | 3075 | 200 numeric setups |
+| `ilu0` + `rcm`, rescale | **1.11 s** | 2280 | 1 numeric setup, 199 rescaled |
+
+The setup cost per time step drops from 1.12 to 0.13 ms (IC(0)), 1.34 to 0.13 ms (ILU(0)) and 0.55 to 0.11 ms (SSOR). What remains is the O(nelem) check of the element data. Over 200 steps this saves 0.20 s, 0.24 s and 0.09 s respectively. In the bundled case the iteration totals of rebuild and rescale differ because, at the loose bundled tolerance (10 % residual reduction per step), round-off differences change the flow trajectory. At a converged tolerance (abs. 1e-10) both take the same iterations in every step and give fields equal to 1e-11. With a fixed time step (`--fixed-dt 2.5d-03`, `c = 1`) rescale reproduces rebuild bit for bit, and the run time drops by 0.10 s (IC(0)) and 0.27 s (ILU(0)).
+
+At a converged tolerance (10 steps, abs. tol. 1e-10, earlier measurement): iterations in step 1 are jacobi 539 / ssor+rcm 212 / ic0 227 / ic0+rcm 152.
+
+Without reordering, IC(0) saves iterations but not time: the original node numbering (bandwidth 8376) makes its triangular solves cache-unfriendly. RCM reduces the bandwidth to 126.
+
+**Non-symmetric methods.** BiCGSTAB and GMRES(m) are meant for non-symmetric systems (future implicit momentum / transport equations); ILU(0) is their natural preconditioner (on upwind convection-diffusion test operators it cuts the iterations ~10-30x). On the symmetric pressure equation CG remains the method of choice. Restarted GMRES is slow on this ill-conditioned SPD system: with RCM+ILU(0) and relative tolerance 1e-10 it needs 1285 iterations for m = 30 and 158 for m = 300 (no restart), against 161 for CG. Both methods verify convergence with the true residual `b - A x`, so the reported residual is always that of the returned solution. A tolerance below the attainable accuracy (the rounding floor of the true residual, ~1e-13 relative for the pressure matrix) ends with `StopReason::Stagnation` instead of iterating to the cap.
+
+**Legacy PCG:** the configuration used by the solver (`solver_opt` = 1 in `*.solver`; `solver_opt` keeps its original meaning and only affects `compute_timestep`) is CG + Jacobi on the EBE operator with `ConvergenceCriteria::legacy_pcg(relToler, absToler)`: relative tolerance measured against the residual after the first iteration, 100000 iterations, zero-step breakdown guards. It reproduces the original implementation bit for bit (checked against the frozen copy in `tests/reference/LegacyPcg.hpp`). The free function `solve_pcg()` is kept as an adapter. All other configurations default to `ResidualReference::InitialResidual` and stop on breakdown (set `residual_reference` to override).
 
 ---
 

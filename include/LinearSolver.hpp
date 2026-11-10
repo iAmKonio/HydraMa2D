@@ -6,12 +6,17 @@
 
 namespace hydrama {
 
+// Result of the legacy solve_pcg() interface. initial_residual is the
+// residual after the FIRST iteration (legacy semantics, see
+// linalg::ResidualReference::FirstIteration).
 struct PCGResult {
     int iterations = 0;
     double initial_residual = 0.0;
     double final_residual = 0.0;
 };
 
+// b = A x for the element-by-element pressure operator (gstif, pdiag).
+// Thin wrapper over linalg::ebe_apply (see linalg/EbeOperator.hpp).
 void matrix_vector_mult(const Mesh& mesh,
                         const std::vector<std::array<double, 3>>& gstif,
                         const std::vector<double>& pdiag,
@@ -24,6 +29,11 @@ void update_lhs(const Mesh& mesh,
                 std::vector<double>& pdiag,
                 std::vector<std::array<double, 3>>& gstif);
 
+// Legacy PCG interface, kept for compatibility. Adapter over the linalg
+// framework: EbeOperator + JacobiPreconditioner + ConjugateGradient with
+// ConvergenceCriteria::legacy_pcg(relToler, absToler); reproduces the
+// original implementation bit for bit. New code should use PressureSolver
+// or the linalg classes directly.
 PCGResult solve_pcg(const Mesh& mesh,
                     const std::vector<std::array<double, 3>>& gstif,
                     const std::vector<double>& pdiag,

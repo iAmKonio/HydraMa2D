@@ -70,7 +70,21 @@ struct CaseOptions {
     int dtfixed = -1;      // bundled: -1
     std::string rel_tol;   // empty: bundled 0.1
     std::string abs_tol;   // empty: bundled 1.0d-06
+    std::string solver_options; // non-empty: replaces the optional "key = value" block of *.solver
 };
+
+// Keeps the ten positional (non-empty) lines of *.solver and replaces
+// everything after them by `options`.
+void replace_solver_options(const fs::path& file, const std::string& options) {
+    std::string kept;
+    int non_empty = 0;
+    for (const auto& line : split_lines(read_text(file))) {
+        if (non_empty == 10) break;
+        kept += line + "\n";
+        if (!is_blank(line)) ++non_empty;
+    }
+    write_text(file, kept + options);
+}
 
 void prepare_case(const fs::path& dir, const CaseOptions& o) {
     copy_benchmark_case(dir);
@@ -80,6 +94,7 @@ void prepare_case(const fs::path& dir, const CaseOptions& o) {
                         {kDtfixed, std::to_string(o.dtfixed)}});
     if (!o.rel_tol.empty())
         set_nonempty_lines(dir / "system/hinterkante.solver", {{kRelToler, o.rel_tol}, {kAbsToler, o.abs_tol}});
+    if (!o.solver_options.empty()) replace_solver_options(dir / "system/hinterkante.solver", o.solver_options);
 }
 
 std::vector<StepLog> parse_log(const std::string& log) {
@@ -413,4 +428,115 @@ TEST_CASE("Solver::initialize creates the results directory even when it fails",
     const Run r = run_solver(wrong);
     CHECK_FALSE(r.initialized);
     CHECK(fs::is_directory(wrong / "results"));
+}
+
+TEST_CASE("Every linear solver configuration reproduces the converged reference values",
+          "[solver][regression][configurations]") {
+    // The converged-pressure variant with other operators/preconditioners/
+    // methods: the flow must match the reference values of the legacy PCG
+    // to the same tight tolerance.
+    //
+    // Tolerances: an absolute residual of 1e-10 on A = dt K only bounds the
+    // pressure error by ||A^{-1}|| 1e-10 ~ 2e-4 (lambda_min(dt K) ~ 5e-7).
+    // CG minimises the error in the energy norm and lands within 1e-8 of the
+    // converged pressure; the residual-minimising BiCGSTAB/GMRES stop
+    // elsewhere in that band (~1e-6 in ||p||). They are therefore run to
+    // 1e-12 (all methods within 5e-9 of the converged pressure); 1e-13 is
+    // below the attainable accuracy of some steps (true residual floor
+    // ~5e-13). GMRES uses a long restart: on this ill-conditioned SPD
+    // system short restarts (m = 20, 30) stall near 1e-12 and end in
+    // StopReason::Stagnation (restarting discards the Krylov space).
+    struct Configuration {
+        std::string options;
+        std::string abs_tol;
+    };
+    const Configuration c = GENERATE(
+        Configuration{"operator_format = csr\n", "1.0d-10"},
+        Configuration{"preconditioner = ssor\nreordering = rcm\n", "1.0d-10"},
+        Configuration{"preconditioner = ic0\n", "1.0d-10"},
+        Configuration{"preconditioner = ic0\nreordering = rcm\noperator_format = csr\n", "1.0d-10"},
+        Configuration{"preconditioner = ilu0\nreordering = rcm\n", "1.0d-10"},
+        Configuration{"method = bicgstab\npreconditioner = ilu0\nreordering = rcm\n", "1.0d-12"},
+        Configuration{"method = gmres\npreconditioner = ic0\nreordering = rcm\ngmres_restart = 200\n", "1.0d-12"},
+        Configuration{"method = gmres\ngmres_orthogonalization = cgs2\noperator_format = csr\n"
+                      "preconditioner = ilu0\nreordering = rcm\ngmres_restart = 200\n",
+                      "1.0d-12"});
+    CAPTURE(c.options, c.abs_tol);
+    CaseOptions o;
+    o.rel_tol = "0.0";
+    o.abs_tol = c.abs_tol;
+    o.solver_options = c.options;
+    const Run r = run_case(o, "configurations");
+    check_healthy_run(r, 10, 0.0, c.abs_tol == "1.0d-10" ? 1.0e-10 : 1.0e-12);
+    CHECK(r.log.find("Pressure solver: ") != std::string::npos);
+
+    CHECK_THAT(l2(r.u), WithinRel(88.81503913006, 1e-7));
+    CHECK_THAT(l2(r.v), WithinRel(11.74480735349, 1e-7));
+    CHECK_THAT(l2(r.p), WithinRel(15.5788580752, 1e-7));
+    CHECK_THAT(max_abs(r.u), WithinRel(1.36615318, 1e-7));
+    CHECK_THAT(max_abs(r.v), WithinRel(0.730081568, 1e-7));
+    CHECK_THAT(max_abs(r.p), WithinRel(2.42867969, 1e-7));
+    CHECK_THAT(r.rtime, WithinRel(4.976913663e-02, 1e-7));
+}
+
+TEST_CASE("Solver log reports the pressure solver configuration", "[solver][configurations]") {
+    CaseOptions o;
+    o.steps = 2;
+    o.solver_options = "preconditioner = ic0\nreordering = rcm\noperator_format = csr\n";
+    const Run r = run_case(o, "config-log");
+    REQUIRE(r.initialized);
+    CHECK(r.log.find("Pressure solver: PCG (CG + rcm+ic0, csr)") != std::string::npos);
+
+    CaseOptions bundled;
+    bundled.steps = 2;
+    const Run legacy = run_case(bundled, "config-log-legacy");
+    CHECK(legacy.log.find("Pressure solver: PCG (CG + jacobi, ebe)") != std::string::npos);
+}
+
+TEST_CASE("Solver::initialize fails cleanly on invalid solver options", "[solver][configurations]") {
+    CaseOptions o;
+    o.solver_options = "preconditioner = amg\n";
+    const Run r = run_case(o, "config-invalid");
+    CHECK_FALSE(r.initialized);
+    CHECK_FALSE(r.state_read);
+}
+
+TEST_CASE("Steady mode logs the Krylov method of the pressure solve", "[solver][configurations]") {
+    CaseOptions o;
+    o.transient = 0;
+    o.dtfixed = 0;
+    o.solver_options = "method = gmres\npreconditioner = ilu0\nreordering = rcm\n";
+    const Run r = run_case(o, "steady-gmres");
+    check_healthy_run(r, 10, 0.1, 1.0e-6);
+    CHECK(r.log.find(" GMRES(30): Solving for p, Initial residual = ") != std::string::npos);
+    CHECK(r.log.find("Pressure solver: Krylov (GMRES(30) + rcm+ilu0, ebe)") != std::string::npos);
+}
+
+TEST_CASE("Global time stepping factorises the preconditioner once per run", "[solver][configurations][reuse]") {
+    // Transient, global dt (changes every step): one numeric setup, then
+    // rescaling. Steady local time stepping: a new setup every step.
+    CaseOptions transient;
+    transient.solver_options = "preconditioner = ic0\nreordering = rcm\n";
+    const Run t = run_case(transient, "reuse-transient");
+    check_healthy_run(t, 10, 0.1, 1.0e-6);
+    CHECK(t.log.find("Pressure solver setup: 1 numeric setups, 9 rescaled reuses, 1 structure builds") !=
+          std::string::npos);
+
+    CaseOptions rebuild = transient;
+    rebuild.solver_options += "preconditioner_reuse = rebuild\n";
+    const Run b = run_case(rebuild, "reuse-rebuild");
+    CHECK(b.log.find("Pressure solver setup: 10 numeric setups, 0 rescaled reuses, 1 structure builds") !=
+          std::string::npos);
+
+    CaseOptions steady = transient;
+    steady.transient = 0;
+    steady.dtfixed = 0;
+    const Run s = run_case(steady, "reuse-steady");
+    check_healthy_run(s, 10, 0.1, 1.0e-6);
+    CHECK(s.log.find("Pressure solver setup: 10 numeric setups, 0 rescaled reuses, 1 structure builds") !=
+          std::string::npos);
+
+    // The legacy configuration prints no setup line (log unchanged).
+    const Run legacy = run_case({}, "reuse-legacy");
+    CHECK(legacy.log.find("Pressure solver setup") == std::string::npos);
 }

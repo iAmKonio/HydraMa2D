@@ -49,9 +49,25 @@ add_executable(hydrama2d_tests
     test_velocity_bc.cpp
     test_io.cpp
     test_solver_regression.cpp
+    test_linalg_vector.cpp
+    test_linalg_interfaces.cpp
+    test_linalg_convergence.cpp
+    test_linalg_monitor.cpp
+    test_linalg_cg.cpp
+    test_pressure_solver.cpp
+    test_linalg_csr.cpp
+    test_linalg_assembly.cpp
+    test_linalg_reordering.cpp
+    test_linalg_assembled_preconditioners.cpp
+    test_linalg_factory.cpp
+    test_solver_config.cpp
+    test_linalg_bicgstab.cpp
+    test_linalg_gmres.cpp
+    test_linalg_nonsymmetric.cpp
+    test_setup_reuse.cpp
 )
 target_link_libraries(hydrama2d_tests PRIVATE hydrama2d_core Catch2::Catch2WithMain)
-target_compile_options(hydrama2d_tests PRIVATE -Wall -Wextra -pedantic)
+target_compile_options(hydrama2d_tests PRIVATE ${HYDRAMA2D_COMPILE_OPTIONS})
 
 # Location of the bundled benchmark case, used by the real-mesh tests.
 target_compile_definitions(hydrama2d_tests PRIVATE

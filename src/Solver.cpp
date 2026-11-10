@@ -67,6 +67,13 @@ bool Solver::initialize() {
 
     // Set up pressure boundary conditions
     pressure_bc_ = setup_pressure_bcs(mesh_, config_.physical.pnode);
+    try {
+        pressure_solver_ = std::make_unique<PressureSolver>(config_.solver, pressure_bc_);
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR: INVALID PRESSURE SOLVER SETTINGS: " << e.what() << "\n";
+        return false;
+    }
+    std::cout << "Pressure solver: " << pressure_solver_->description() << "\n";
 
     // Check for restart file
     std::string restart_file = prefix + "results/" + config_.casename + ".var";
@@ -150,6 +157,7 @@ void Solver::run() {
 
         // Update LHS lumped mass inverse and time-scaled Laplacian
         update_lhs(mesh_, delte_, elcoe2_, pdiag_, gstif_);
+        pressure_solver_->update(mesh_, gstif_, pdiag_);
 
         // ==========================================
         // Step 1: Intermediate Velocity Calculation
@@ -169,12 +177,13 @@ void Solver::run() {
         // ==========================================
         compute_step2(mesh_, u_, v_, u_old_, v_old_, config_.control.theta[0], rhs1_);
 
-        PCGResult pcg_res = solve_pcg(mesh_, gstif_, pdiag_, rhs1_,
-                                      pressure_bc_.nodes, pressure_bc_.values,
-                                      config_.solver.relToler, config_.solver.absToler,
-                                      p_);
+        const linalg::SolveResult pcg_res = pressure_solver_->solve(rhs1_, p_);
 
         iiter_total_ += pcg_res.iterations;
+        if (!pcg_res.converged) {
+            std::cout << " WARNING: pressure solve at step " << iitime << " did not converge ("
+                      << linalg::to_string(pcg_res.reason) << ", " << pcg_res.iterations << " iterations)\n";
+        }
 
         // ==========================================
         // Step 3: Velocity Correction
@@ -214,7 +223,8 @@ void Solver::run() {
                 (void)hb3;
 
                 std::cout << "\n Time = " << iitime << "\n\n";
-                std::cout << " PCG: Solving for p, Initial residual = " << pcg_res.initial_residual
+                std::cout << " " << pressure_solver_->label() << ": Solving for p, Initial residual = "
+                          << pcg_res.reference_residual
                           << " Final residual = " << pcg_res.final_residual
                           << " Iter: " << pcg_res.iterations << "\n";
 
@@ -227,7 +237,7 @@ void Solver::run() {
             if (iitime % config_.control.iwrite == 0 || iitime_start) {
                 iitime_start = false;
                 std::cout << std::setw(8) << iitime
-                          << " pInitial: " << std::setw(15) << std::setprecision(8) << std::scientific << pcg_res.initial_residual
+                          << " pInitial: " << std::setw(15) << std::setprecision(8) << std::scientific << pcg_res.reference_residual
                           << " pFinal: " << std::setw(15) << std::setprecision(8) << std::scientific << pcg_res.final_residual
                           << " Iter: " << std::setw(6) << pcg_res.iterations
                           << " IterCumulative: " << std::setw(9) << iiter_total_ << "\n";
@@ -264,6 +274,11 @@ void Solver::run() {
     }
 
     std::cout << " Simulation Completed\n";
+    if (!pressure_solver_->legacy()) {
+        const PressureSolver::SetupStatistics& st = pressure_solver_->statistics();
+        std::cout << " Pressure solver setup: " << st.numeric_setups << " numeric setups, " << st.rescaled_reuses
+                  << " rescaled reuses, " << st.structure_builds << " structure builds\n";
+    }
 
     if (config_.control.transient_on < 1) {
         std::cout << " Outputting Data\n";

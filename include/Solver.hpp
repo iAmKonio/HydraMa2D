@@ -4,6 +4,8 @@
 #include "Mesh.hpp"
 #include "BoundaryConditions.hpp"
 #include "LinearSolver.hpp"
+#include "PressureSolver.hpp"
+#include <memory>
 #include <vector>
 #include <string>
 
@@ -45,6 +47,9 @@ private:
     std::vector<double> elcoe2_;
     std::vector<double> pdiag_;
     std::vector<std::array<double, 3>> gstif_;
+
+    // Pressure Poisson solver (Step 2); re-bound to gstif_/pdiag_ every step.
+    std::unique_ptr<PressureSolver> pressure_solver_;
 
     // Simulation metrics
     int istart_ = 1;

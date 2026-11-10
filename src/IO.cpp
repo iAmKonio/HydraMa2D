@@ -1,4 +1,8 @@
 #include "IO.hpp"
+
+#include "linalg/Factory.hpp"
+#include "linalg/Reordering.hpp"
+
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -6,10 +10,12 @@
 #include <algorithm>
 #include <limits>
 #include <vector>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include <set>
 
 namespace hydrama {
 
@@ -80,6 +86,151 @@ bool IO::read_physical(const std::string& filepath, PhysicalConfig& config) {
     return true;
 }
 
+namespace {
+
+std::string trim(const std::string& s) {
+    const size_t b = s.find_first_not_of(" \t\r");
+    if (b == std::string::npos) return "";
+    const size_t e = s.find_last_not_of(" \t\r");
+    return s.substr(b, e - b + 1);
+}
+
+std::string to_lower(std::string s) {
+    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+bool is_identifier(const std::string& s) {
+    if (s.empty() || !(std::isalpha(static_cast<unsigned char>(s[0])) || s[0] == '_')) return false;
+    for (char c : s)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_')) return false;
+    return true;
+}
+
+// Whole-string conversions (no trailing garbage); Fortran 'd' exponents allowed.
+bool parse_int(const std::string& s, int& out) {
+    try {
+        size_t pos = 0;
+        const int v = std::stoi(s, &pos);
+        if (pos != s.size()) return false;
+        out = v;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parse_double(std::string s, double& out) {
+    for (char& c : s)
+        if (c == 'd' || c == 'D') c = 'e';
+    try {
+        size_t pos = 0;
+        const double v = std::stod(s, &pos);
+        if (pos != s.size() || !std::isfinite(v)) return false;
+        out = v;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool option_error(const std::string& filepath, const std::string& message) {
+    std::cerr << "ERROR: *.solver OPTION " << message << " (" << filepath << ")\n";
+    return false;
+}
+
+// Optional "key = value" settings following the positional block of *.solver.
+bool read_solver_options(const std::vector<std::string>& lines, size_t first, const std::string& filepath,
+                         SolverConfig& config) {
+    std::set<std::string> seen;
+    for (size_t n = first; n < lines.size(); ++n) {
+        std::string line = lines[n];
+        const size_t comment = line.find_first_of("#!");
+        if (comment != std::string::npos) line.erase(comment);
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;               // free text / separators
+        const std::string key = to_lower(trim(line.substr(0, eq)));
+        if (!is_identifier(key)) continue;                    // header text containing '='
+        const std::string raw = trim(line.substr(eq + 1));
+        const std::string value = to_lower(raw);
+        const std::string where = "'" + key + " = " + raw + "'";
+
+        if (raw.empty()) return option_error(filepath, where + ": missing value");
+        if (!seen.insert(key).second) return option_error(filepath, "'" + key + "' is given more than once");
+
+        if (key == "method") {
+            if (!linalg::find_krylov_solver(value)) {
+                return option_error(filepath, where + ": unknown method (available: " +
+                                                  linalg::krylov_solver_names() + ")");
+            }
+            config.method = value;
+        } else if (key == "preconditioner") {
+            if (!linalg::find_preconditioner(value)) {
+                return option_error(filepath, where + ": unknown preconditioner (available: " +
+                                                  linalg::preconditioner_names() + ")");
+            }
+            config.preconditioner = value;
+        } else if (key == "operator_format") {
+            if (value != "ebe" && value != "csr") return option_error(filepath, where + ": expected ebe | csr");
+            config.operator_format = value;
+        } else if (key == "reordering") {
+            if (!linalg::is_ordering(value)) return option_error(filepath, where + ": expected none | rcm");
+            config.reordering = value;
+        } else if (key == "max_iterations") {
+            int v = 0;
+            if (!parse_int(raw, v) || v < 1) return option_error(filepath, where + ": expected an integer >= 1");
+            config.max_iterations = v;
+        } else if (key == "residual_reference") {
+            if (value != "first_iteration" && value != "initial" && value != "rhs") {
+                return option_error(filepath, where + ": expected first_iteration | initial | rhs");
+            }
+            config.residual_reference = value;
+        } else if (key == "ssor_omega") {
+            double v = 0.0;
+            if (!parse_double(raw, v) || !(v > 0.0 && v < 2.0)) {
+                return option_error(filepath, where + ": expected a number with 0 < omega < 2");
+            }
+            config.ssor_omega = v;
+        } else if (key == "diagonal_shift") {
+            double v = 0.0;
+            if (!parse_double(raw, v) || v < 0.0) return option_error(filepath, where + ": expected a number >= 0");
+            config.diagonal_shift = v;
+        } else if (key == "preconditioner_reuse") {
+            if (value != "rescale" && value != "rebuild") {
+                return option_error(filepath, where + ": expected rescale | rebuild");
+            }
+            config.preconditioner_reuse = value;
+        } else if (key == "gmres_restart") {
+            int v = 0;
+            if (!parse_int(raw, v) || v < 1) return option_error(filepath, where + ": expected an integer >= 1");
+            config.gmres_restart = v;
+        } else if (key == "gmres_orthogonalization") {
+            if (!linalg::is_orthogonalization(value)) return option_error(filepath, where + ": expected mgs | cgs2");
+            config.gmres_orthogonalization = value;
+        } else {
+            return option_error(filepath, "'" + key + "': unknown option (available: method, preconditioner, "
+                                          "operator_format, reordering, max_iterations, residual_reference, "
+                                          "ssor_omega, diagonal_shift, preconditioner_reuse, "
+                                          "gmres_restart, gmres_orthogonalization)");
+        }
+    }
+
+    // Consistency checks that involve several options.
+    const linalg::PreconditionerInfo* pre = linalg::find_preconditioner(config.preconditioner);
+    if (config.reordering != "none" && pre && !pre->requires_assembled) {
+        return option_error(filepath, "'reordering = " + config.reordering + "' requires an assembled preconditioner "
+                                      "(ssor | ic0 | ilu0), got '" + config.preconditioner + "'");
+    }
+    const linalg::KrylovInfo* krylov = linalg::find_krylov_solver(config.method);
+    if (krylov && krylov->requires_symmetric && pre && !pre->symmetric) {
+        std::cout << "WARNING: preconditioner '" << config.preconditioner << "' is not symmetric in general; with '"
+                  << config.method << "' it relies on the symmetry of the pressure matrix\n";
+    }
+    return true;
+}
+
+} // namespace
+
 bool IO::read_solver(const std::string& filepath, SolverConfig& config) {
     auto lines = read_non_empty_lines(filepath);
     if (lines.size() < 10) {
@@ -91,7 +242,8 @@ bool IO::read_solver(const std::string& filepath, SolverConfig& config) {
     config.relToler   = parse_fortran_double(lines[6]);
     config.absToler   = parse_fortran_double(lines[9]);
 
-    return true;
+    // Optional linear solver settings after the positional block.
+    return read_solver_options(lines, 10, filepath, config);
 }
 
 bool IO::read_mesh(const std::string& filepath, Mesh& mesh) {

@@ -8,3 +8,17 @@ Relative Residual. Zero for OFF
 ---------------------------------------------------------------------------------------------------
 Absolute Residual. Zero for OFF
 1.0d-06
+---------------------------------------------------------------------------------------------------
+Linear Solver Options (optional, one "key = value" per line; omitted keys keep the defaults shown)
+method          = cg       # cg (SPD) | bicgstab | gmres (general systems)
+preconditioner  = jacobi   # none | jacobi | ssor | ic0 | ilu0
+operator_format = ebe      # ebe (matrix-free) | csr (assembled)
+reordering      = none     # none | rcm (only with ssor, ic0, ilu0)
+max_iterations  = 100000
+ssor_omega      = 1.0      # 0 < omega < 2 (ssor only)
+diagonal_shift  = 0.0      # initial diagonal shift alpha (ic0, ilu0)
+preconditioner_reuse = rescale   # rescale: factorise once, rescale for uniform dt | rebuild
+gmres_restart   = 30       # GMRES(m) restart length (gmres only)
+gmres_orthogonalization = mgs   # mgs | cgs2 (gmres only)
+# residual_reference = initial   # first_iteration | initial | rhs. Default: first_iteration for
+#                                # cg + jacobi + ebe + none (legacy PCG), initial otherwise
