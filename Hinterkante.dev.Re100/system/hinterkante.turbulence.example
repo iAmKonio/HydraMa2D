@@ -1,0 +1,6 @@
+# RANS Turbulence Model: Menter k-omega SST (2003)
+model                  k-omega-sst
+wall_treatment         low-re
+wall_distance          exact
+gradient_recovery      ppr
+production_limiter     10
