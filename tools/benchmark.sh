@@ -120,27 +120,41 @@ if [[ $suite -eq 0 ]]; then
 fi
 
 names=(legacy ssor-rebuild ssor-rescale ic0-rebuild ic0-rescale ilu0-rebuild ilu0-rescale)
-declare -A opts=(
-    [legacy]=""
-    [ssor-rebuild]="preconditioner = ssor|reordering = rcm|preconditioner_reuse = rebuild"
-    [ssor-rescale]="preconditioner = ssor|reordering = rcm|preconditioner_reuse = rescale"
-    [ic0-rebuild]="preconditioner = ic0|reordering = rcm|preconditioner_reuse = rebuild"
-    [ic0-rescale]="preconditioner = ic0|reordering = rcm|preconditioner_reuse = rescale"
-    [ilu0-rebuild]="preconditioner = ilu0|reordering = rcm|preconditioner_reuse = rebuild"
-    [ilu0-rescale]="preconditioner = ilu0|reordering = rcm|preconditioner_reuse = rescale"
-)
-declare -A best info
+
+get_opts() {
+    case "$1" in
+        legacy) echo "" ;;
+        ssor-rebuild) echo "preconditioner = ssor|reordering = rcm|preconditioner_reuse = rebuild" ;;
+        ssor-rescale) echo "preconditioner = ssor|reordering = rcm|preconditioner_reuse = rescale" ;;
+        ic0-rebuild) echo "preconditioner = ic0|reordering = rcm|preconditioner_reuse = rebuild" ;;
+        ic0-rescale) echo "preconditioner = ic0|reordering = rcm|preconditioner_reuse = rescale" ;;
+        ilu0-rebuild) echo "preconditioner = ilu0|reordering = rcm|preconditioner_reuse = rebuild" ;;
+        ilu0-rescale) echo "preconditioner = ilu0|reordering = rcm|preconditioner_reuse = rescale" ;;
+    esac
+}
+
 for n in "${names[@]}"; do
-    IFS='|' read -r -a s <<< "${opts[$n]}"
-    prepare "$work/$n" "${s[@]+"${s[@]}"}"
-    best[$n]=1e30
+    raw_opt="$(get_opts "$n")"
+    if [[ -n "$raw_opt" ]]; then
+        IFS='|' read -r -a s <<< "$raw_opt"
+        prepare "$work/$n" "${s[@]}"
+    else
+        prepare "$work/$n"
+    fi
+    echo "1e30" > "$work/best_$n"
+    echo "" > "$work/info_$n"
 done
 for ((r = 0; r < repeats; ++r)); do # interleaved: machine noise affects all alike
     for n in "${names[@]}"; do
         out="$(run_once "$work/$n")"
-        best[$n]="$(min "${best[$n]}" "${out%% *}")"; info[$n]="${out#* }"
+        curr_best="$(cat "$work/best_$n")"
+        new_best="$(min "$curr_best" "${out%% *}")"
+        echo "$new_best" > "$work/best_$n"
+        echo "${out#* }" > "$work/info_$n"
     done
 done
 for n in "${names[@]}"; do
-    printf '%-14s %7.3f s  iterations %6s  %s\n' "$n" "${best[$n]}" "${info[$n]%%|*}" "${info[$n]#*|}"
+    b="$(cat "$work/best_$n")"
+    inf="$(cat "$work/info_$n")"
+    printf '%-14s %7.3f s  iterations %6s  %s\n' "$n" "$b" "${inf%%|*}" "${inf#*|}"
 done
