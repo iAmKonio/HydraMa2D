@@ -37,6 +37,20 @@ struct BoundaryGroup {
     std::vector<int> sides;
 };
 
+// A periodic master/slave node pair (0-based node indices).
+struct PeriodicPair {
+    int slave = -1;
+    int master = -1;
+};
+
+// Periodic boundary pair mapping between two boundary patches/tags.
+struct PeriodicBoundary {
+    int slave_tag = -1;
+    int master_tag = -1;
+    std::array<double, 2> translation = {0.0, 0.0};
+    std::vector<PeriodicPair> pairs;
+};
+
 struct FaceNormal {
     double nx = 0.0;
     double ny = 0.0;
@@ -87,6 +101,21 @@ public:
     // meshes, whose sides are identified by side_id only). Informational: the
     // solver uses iside[].flag.
     std::vector<BoundaryGroup> boundary_groups;
+
+    // Periodic boundary and node-pair information
+    std::vector<PeriodicBoundary> periodic_boundaries;
+    std::vector<PeriodicPair> periodic_pairs;  // flattened list of all unique (slave, master)
+    std::vector<int> periodic_master_map;      // size npoin: map[i] = canonical master
+    std::vector<int> periodic_slave_nodes;     // sorted unique list of slave nodes
+    std::vector<std::vector<int>> periodic_groups; // connected components: [master, slave1, slave2, ...]
+
+    bool has_periodic() const noexcept { return !periodic_pairs.empty(); }
+    int canonical_master(int node) const noexcept {
+        if (periodic_master_map.empty() || node < 0 || node >= static_cast<int>(periodic_master_map.size())) {
+            return node;
+        }
+        return periodic_master_map[node];
+    }
 
     // Boundary normals and lengths
     std::vector<FaceNormal> face_norm;

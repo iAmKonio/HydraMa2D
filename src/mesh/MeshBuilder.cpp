@@ -1,4 +1,5 @@
 #include "mesh/MeshBuilder.hpp"
+#include "numerics/Periodic.hpp"
 
 #include "Problems.hpp"
 
@@ -589,6 +590,111 @@ Mesh build_mesh(const MeshData& data, const BuildOptions& options, ImportReport*
             if (std::find(sides[i].tags.begin(), sides[i].tags.end(), tag) != sides[i].tags.end())
                 bg.sides.push_back(static_cast<int>(i));
         if (!bg.sides.empty()) mesh.boundary_groups.push_back(std::move(bg));
+    }
+
+    // ------------------------------------------------------------------
+    // 11. Periodic boundary pairings and node maps
+    // ------------------------------------------------------------------
+    auto node_of_tag = [&](std::int64_t tag) -> int {
+        auto it = index_of_tag.find(tag);
+        if (it == index_of_tag.end()) return -1;
+        return new_index[static_cast<std::size_t>(it->second)];
+    };
+
+    for (const auto& link : data.periodic_links) {
+        PeriodicBoundary pb;
+        pb.slave_tag = link.entity_tag;
+        pb.master_tag = link.master_tag;
+        if (link.affine.size() >= 2) {
+            pb.translation = {link.affine[0], link.affine[1]};
+        }
+        for (const auto& [slave_tag, master_tag] : link.node_tags) {
+            int s = node_of_tag(slave_tag);
+            int m = node_of_tag(master_tag);
+            if (s >= 0 && m >= 0 && s != m) {
+                pb.pairs.push_back({s, m});
+            }
+        }
+        if (!pb.pairs.empty()) {
+            mesh.periodic_boundaries.push_back(std::move(pb));
+        }
+    }
+
+    // Also auto-pair any periodic boundary groups (flag 505 / BoundaryType::Periodic)
+    // if no explicit periodic links were supplied by the file
+    if (mesh.periodic_boundaries.empty()) {
+        std::vector<int> periodic_groups;
+        for (const auto& bg : mesh.boundary_groups) {
+            auto it = groups.find(bg.tag);
+            if (it != groups.end() && it->second.resolved &&
+                (it->second.patch.type == BoundaryType::Periodic || it->second.patch.flag == flags::kPeriodic)) {
+                periodic_groups.push_back(bg.tag);
+            }
+        }
+        if (periodic_groups.size() == 2) {
+            int slave_tag = periodic_groups[0];
+            int master_tag = periodic_groups[1];
+            std::vector<int> slave_nodes, master_nodes;
+            for (const auto& bg : mesh.boundary_groups) {
+                if (bg.tag == slave_tag) {
+                    for (int s : bg.sides) {
+                        slave_nodes.push_back(mesh.iside[static_cast<std::size_t>(s)].node1);
+                        slave_nodes.push_back(mesh.iside[static_cast<std::size_t>(s)].node2);
+                    }
+                } else if (bg.tag == master_tag) {
+                    for (int s : bg.sides) {
+                        master_nodes.push_back(mesh.iside[static_cast<std::size_t>(s)].node1);
+                        master_nodes.push_back(mesh.iside[static_cast<std::size_t>(s)].node2);
+                    }
+                }
+            }
+            std::sort(slave_nodes.begin(), slave_nodes.end());
+            slave_nodes.erase(std::unique(slave_nodes.begin(), slave_nodes.end()), slave_nodes.end());
+            std::sort(master_nodes.begin(), master_nodes.end());
+            master_nodes.erase(std::unique(master_nodes.begin(), master_nodes.end()), master_nodes.end());
+
+            match_periodic_boundary_nodes(mesh, slave_nodes, master_nodes);
+        }
+    }
+
+    mesh.periodic_master_map.resize(static_cast<std::size_t>(mesh.npoin));
+    for (int i = 0; i < mesh.npoin; ++i) mesh.periodic_master_map[static_cast<std::size_t>(i)] = i;
+
+    std::function<int(int)> find_root = [&](int i) {
+        if (mesh.periodic_master_map[static_cast<std::size_t>(i)] == i) return i;
+        return mesh.periodic_master_map[static_cast<std::size_t>(i)] =
+                   find_root(mesh.periodic_master_map[static_cast<std::size_t>(i)]);
+    };
+
+    for (const auto& pb : mesh.periodic_boundaries) {
+        for (const auto& p : pb.pairs) {
+            int root_m = find_root(p.master);
+            int root_s = find_root(p.slave);
+            if (root_s != root_m) {
+                mesh.periodic_master_map[static_cast<std::size_t>(root_s)] = root_m;
+            }
+        }
+    }
+
+    mesh.periodic_pairs.clear();
+    mesh.periodic_slave_nodes.clear();
+    mesh.periodic_groups.clear();
+    std::map<int, std::vector<int>> master_to_slaves;
+    for (int i = 0; i < mesh.npoin; ++i) {
+        mesh.periodic_master_map[static_cast<std::size_t>(i)] = find_root(i);
+        if (mesh.periodic_master_map[static_cast<std::size_t>(i)] != i) {
+            int root = mesh.periodic_master_map[static_cast<std::size_t>(i)];
+            mesh.periodic_slave_nodes.push_back(i);
+            mesh.periodic_pairs.push_back({i, root});
+            master_to_slaves[root].push_back(i);
+        }
+    }
+    for (auto& [master, slaves] : master_to_slaves) {
+        std::vector<int> grp;
+        grp.reserve(1 + slaves.size());
+        grp.push_back(master);
+        grp.insert(grp.end(), slaves.begin(), slaves.end());
+        mesh.periodic_groups.push_back(std::move(grp));
     }
 
     report.triangles = mesh.num_triangles();

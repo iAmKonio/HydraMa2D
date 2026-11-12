@@ -18,6 +18,7 @@ inline constexpr int kWallHot = 501;       // constant temperature wall (T = 1),
 inline constexpr int kWallCold = 502;      // constant temperature wall (T = 0), no-slip
 inline constexpr int kInlet = 503;         // prescribed inflow velocity
 inline constexpr int kOutlet = 504;        // pressure outlet (p = 0)
+inline constexpr int kPeriodic = 505;      // periodic / cyclic boundary pair
 inline constexpr int kSymmetry = 506;      // symmetry / slip (u . n = 0)
 inline constexpr int kInletProfile = 507;  // backward-facing-step polynomial inflow profile
 inline constexpr int kInletParabolic = 508; // fully developed (Poiseuille) inflow, mean velocity 1
@@ -26,11 +27,12 @@ inline constexpr int kRotatingWall = 510;  // wall rotating about an axis (presc
 } // namespace flags
 
 enum class BoundaryKind : unsigned char {
-    Unknown,   // unassigned (0) or unrecognised code (e.g. 505)
+    Unknown,   // unassigned (0) or unrecognised code
     Wall,      // wall: 500, 501, 502, 509, 510
     Inlet,     // prescribed velocity: 503, 507, 508
     Outlet,    // prescribed pressure: 504
     Symmetry,  // slip / symmetry: 506
+    Periodic,  // periodic: 505
 };
 
 constexpr BoundaryKind classify_boundary_flag(int flag) noexcept {
@@ -47,6 +49,8 @@ constexpr BoundaryKind classify_boundary_flag(int flag) noexcept {
         return BoundaryKind::Inlet;
     case flags::kOutlet:
         return BoundaryKind::Outlet;
+    case flags::kPeriodic:
+        return BoundaryKind::Periodic;
     case flags::kSymmetry:
         return BoundaryKind::Symmetry;
     default:
@@ -64,6 +68,7 @@ constexpr std::string_view to_string(BoundaryKind kind) noexcept {
     case BoundaryKind::Inlet: return "inlet";
     case BoundaryKind::Outlet: return "outlet";
     case BoundaryKind::Symmetry: return "symmetry";
+    case BoundaryKind::Periodic: return "periodic";
     case BoundaryKind::Unknown: break;
     }
     return "unknown";

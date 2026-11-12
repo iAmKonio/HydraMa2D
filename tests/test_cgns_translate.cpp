@@ -308,7 +308,7 @@ TEST_CASE("CGNS: declared types that HydraMa2D rejects", "[cgns][translate][erro
     CHECK_THAT(with(1, "far", kBCFarfield), ContainsSubstring("'far' (tag 2) is a 'farfield' boundary"));
     CHECK_THAT(with(0, "inflow_1", kBCInflowSupersonic), ContainsSubstring("is a 'supersonic_inlet' boundary"));
     CHECK_THAT(with(0, "pressure_inlet", kBCInflow), ContainsSubstring("is a 'pressure_inlet' boundary"));
-    CHECK_THAT(with(2, "periodic_1", kBCTypeNull), ContainsSubstring("is a 'periodic' boundary"));
+    CHECK_THAT(with(2, "massflow_inlet_1", kBCTypeNull), ContainsSubstring("is a 'mass_flow_inlet' boundary"));
     CHECK_THAT(with(3, "centreline", kBCSymmetryPolar), ContainsSubstring("is a 'axis' boundary"));
     CHECK_THAT(with(3, "front", kBCAxisymmetricWedge), ContainsSubstring("is a 'wedge' boundary"));
     CHECK_THAT(with(2, "upper", kBCDegenerateLine), ContainsSubstring("BC 'upper' (BC 3): BCDegenerateLine is not supported"));

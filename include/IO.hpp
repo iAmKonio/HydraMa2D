@@ -58,6 +58,10 @@ public:
     static bool read_inflow(const std::string& filepath, InflowConfig& inflow);
     static bool read_inflow_config(const std::string& filepath, InflowConfig& inflow, std::string& error);
 
+    // Optional system/<case>.periodic: missing file leaves periodic disabled and returns true.
+    static bool read_periodic(const std::string& filepath, PeriodicConfig& config);
+    static bool read_periodic_config(const std::string& filepath, PeriodicConfig& config, std::string& error);
+
     static bool read_mesh(const std::string& filepath, Mesh& mesh);
     static bool read_boundary_flags(const std::string& filepath, Mesh& mesh);
 

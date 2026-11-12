@@ -27,12 +27,13 @@ TEST_CASE("BoundaryKind: flag code table", "[boundary_kind]") {
     CHECK(classify_boundary_flag(502) == BoundaryKind::Wall);
     CHECK(classify_boundary_flag(503) == BoundaryKind::Inlet);
     CHECK(classify_boundary_flag(504) == BoundaryKind::Outlet);
+    CHECK(classify_boundary_flag(505) == BoundaryKind::Periodic);
     CHECK(classify_boundary_flag(506) == BoundaryKind::Symmetry);
     CHECK(classify_boundary_flag(507) == BoundaryKind::Inlet);
     CHECK(classify_boundary_flag(508) == BoundaryKind::Inlet);
     CHECK(classify_boundary_flag(509) == BoundaryKind::Wall);
     CHECK(classify_boundary_flag(510) == BoundaryKind::Wall);
-    for (int unknown : {0, -1, 499, 505, 511, 600}) {
+    for (int unknown : {0, -1, 499, 511, 600}) {
         INFO("flag " << unknown);
         CHECK(classify_boundary_flag(unknown) == BoundaryKind::Unknown);
         CHECK_FALSE(is_wall_flag(unknown));
@@ -42,6 +43,7 @@ TEST_CASE("BoundaryKind: flag code table", "[boundary_kind]") {
     CHECK(flags::kWallCold == 502);
     CHECK(flags::kInlet == 503);
     CHECK(flags::kOutlet == 504);
+    CHECK(flags::kPeriodic == 505);
     CHECK(flags::kSymmetry == 506);
     CHECK(flags::kInletProfile == 507);
     CHECK(flags::kInletParabolic == 508);
@@ -53,6 +55,7 @@ TEST_CASE("BoundaryKind: names", "[boundary_kind]") {
     CHECK(to_string(BoundaryKind::Wall) == "wall");
     CHECK(to_string(BoundaryKind::Inlet) == "inlet");
     CHECK(to_string(BoundaryKind::Outlet) == "outlet");
+    CHECK(to_string(BoundaryKind::Periodic) == "periodic");
     CHECK(to_string(BoundaryKind::Symmetry) == "symmetry");
     CHECK(to_string(BoundaryKind::Unknown) == "unknown");
 }

@@ -62,6 +62,14 @@ public:
         double rad = alpha_deg * (kPi / 180.0);
         set_inflow_velocity(speed * std::cos(rad), speed * std::sin(rad));
     }
+
+    // Periodic boundary conditions and driving force (Phase 2.2)
+    void set_periodic_config(PeriodicConfig config) { periodic_config_ = std::move(config); }
+    const PeriodicConfig& periodic_config() const noexcept { return periodic_config_; }
+    void set_driving_force(double fx, double fy) {
+        periodic_config_.driving_force = {fx, fy};
+        periodic_config_.enabled = true;
+    }
     void set_max_steps(int n) {
         config_.override_ntime = n;
         config_.control.ntime = n;
@@ -127,6 +135,7 @@ private:
     std::vector<double> elcoe2_;
     std::vector<double> pdiag_;
     std::vector<std::array<double, 3>> gstif_;
+    std::vector<double> nodal_mass_;
 
     // Pressure Poisson solver (Step 2); re-bound to gstif_/pdiag_ every step.
     std::unique_ptr<PressureSolver> pressure_solver_;
@@ -163,6 +172,10 @@ private:
     // Thermal helpers (only called when thermal_config_.enabled).
     bool initialize_thermal(const std::string& prefix, bool restarted);
     void advance_temperature();
+
+    // Periodic helpers
+    PeriodicConfig periodic_config_;
+    bool initialize_periodic(const std::string& prefix);
 };
 
 } // namespace hydrama

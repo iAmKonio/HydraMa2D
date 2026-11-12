@@ -39,7 +39,8 @@ NameResolution::Status status_of(const std::string& name) { return resolve_bound
 TEST_CASE("Implemented boundary types are exactly the legacy flag codes", "[boundary_naming]") {
     const std::map<BoundaryType, int> expected = {
         {BoundaryType::Wall, 500},   {BoundaryType::WallHot, 501},  {BoundaryType::WallCold, 502},
-        {BoundaryType::Inlet, 503},  {BoundaryType::Outlet, 504},   {BoundaryType::Symmetry, 506},
+        {BoundaryType::Inlet, 503},  {BoundaryType::Outlet, 504},   {BoundaryType::Periodic, 505},
+        {BoundaryType::Symmetry, 506},
         {BoundaryType::InletProfile, 507}, {BoundaryType::InletParabolic, 508},
         {BoundaryType::MovingWall, 509}, {BoundaryType::Rotating, 510},
     };
@@ -59,7 +60,8 @@ TEST_CASE("Implemented boundary types are exactly the legacy flag codes", "[boun
         }
     }
     CHECK(seen_flags.size() == expected.size());
-    CHECK(boundary_type_from_flag(505) == BoundaryType::Custom);
+    CHECK(boundary_type_from_flag(505) == BoundaryType::Periodic);
+    CHECK(boundary_type_from_flag(511) == BoundaryType::Custom);
     CHECK(boundary_type_from_flag(0) == BoundaryType::Custom);
     CHECK(boundary_type_from_flag(-1) == BoundaryType::Custom);
 }
@@ -237,11 +239,12 @@ TEST_CASE("Numeric names are legacy flag codes", "[boundary_naming]") {
     CHECK(resolved_type("502") == BoundaryType::WallCold);
     CHECK(resolved_type("503") == BoundaryType::Inlet);
     CHECK(resolved_type("504") == BoundaryType::Outlet);
+    CHECK(resolved_type("505") == BoundaryType::Periodic);
     CHECK(resolved_type("506") == BoundaryType::Symmetry);
     CHECK(resolved_type("507") == BoundaryType::InletProfile);
     CHECK(resolved_type(" 507 ") == BoundaryType::InletProfile);
     CHECK(resolved_type("508") == BoundaryType::InletParabolic);
-    for (const char* name : {"505", "0", "1", "99999999999999999999"}) {
+    for (const char* name : {"511", "0", "1", "99999999999999999999"}) {
         CAPTURE(name);
         CHECK(status_of(name) == NameResolution::Status::UnknownCode);
     }

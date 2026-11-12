@@ -30,6 +30,7 @@ separator:
 | no-slip wall | `wall`, `bottom_wall`, `cylinderWall`, `Wall 2` | 500 |
 | velocity inlet (u = 1, v = 0) | `inlet`, `inlet_left`, `velocityInlet` | 503 |
 | pressure outlet (p = 0) | `outlet`, `Outlet-1`, `pressure_outlet` | 504 |
+| periodic / cyclic boundary pair | `periodic`, `cyclic`, `periodic_left` | 505 |
 | symmetry / free slip (u·n = 0) | `symmetry`, `Symmetry Plane`, `slip_wall` | 506 |
 | backward-facing-step inflow profile | `inlet_profile` | 507 |
 | fully developed (parabolic) inflow, mean velocity 1 | `parabolic_inlet`, `inlet_parabolic`, `poiseuille_inlet` | 508 |
@@ -66,7 +67,7 @@ that uses one is rejected with a clear message. It is never run with a wrong con
    | `Wall_T1` | `wall_t_1` | wall, t, 1 |
 
 2. **Legacy codes.** A purely numeric name is a legacy flag code: `503` means inlet. Only the codes of the first
-   table are accepted. Other codes (e.g. `505`) must go through the `*.bofl` file.
+   table are accepted. Other codes (e.g. `511`) must go through the `*.bofl` file.
 
 3. **Whole-token matches.** Every keyword and alias (normalised the same way) is searched for as a contiguous sequence
    of **whole tokens**:
@@ -99,11 +100,12 @@ Examples:
 | `pressure_outlet`, `static_pressure_outlet` | outlet (504) | longest match `pressure_outlet` |
 | `pressure_inlet` | rejected: not implemented | longest match `pressure_inlet` |
 | `supersonic_inlet` | rejected: not implemented | |
-| `periodic_left`, `cyclicAMI` | rejected: not implemented | |
+| `periodic_left`, `cyclicAMI` | periodic (505) | keyword periodic |
 | `inlet_wall` | rejected: ambiguous | inlet and wall |
 | `airfoil`, `left`, `boundary_1` | rejected: no keyword | rename, e.g. `airfoil_wall` |
 | `503` | inlet (503) | legacy code |
-| `505` | rejected: unknown code | use the `*.bofl` file |
+| `505` | periodic (505) | legacy code |
+| `511` | rejected: unknown code | use the `*.bofl` file |
 
 ---
 
@@ -157,6 +159,7 @@ A `*.bofl` entry for the group overrides both the name and the declared type.
 | `wall_cold` | 502 | `cold_wall`, `wall_t0`, `cooled_wall`, `isothermal_cold` | No-slip wall tagged as constant temperature T = 0 (there is no energy equation: the flow sees a no-slip wall). |
 | `inlet` | 503 | `inlets`, `inflow`, `velocity_inlet`, `inlet_velocity`, `velocity_inflow`, `uniform_inlet` | Velocity inlet, uniform u = 1, v = 0. |
 | `outlet` | 504 | `outlets`, `outflow`, `pressure_outlet`, `outlet_pressure`, `exit`, `fixed_pressure` | Pressure outlet, p = 0 (velocity: natural / do-nothing condition). |
+| `periodic` | 505 | `cyclic`, `cyclic_ami`, `periodicity` | Periodic / cyclic boundary pair. |
 | `symmetry` | 506 | `sym`, `symm`, `symmetric`, `symmetry_plane`, `symmetry_line`, `mirror`, `slip`, `slip_wall`, `free_slip`, `freeslip`, `inviscid_wall`, `euler_wall` | Symmetry line / free-slip wall, u . n = 0. |
 | `inlet_profile` | 507 | `profile_inlet`, `step_inlet`, `bfs_inlet`, `inlet_bfs` | Backward-facing-step inflow: fixed 6th-order polynomial u(y), v = 0. |
 | `inlet_parabolic` | 508 | `parabolic_inlet`, `parabolic_inflow`, `poiseuille_inlet`, `inlet_poiseuille`, `fully_developed_inlet`, `developed_inlet` | Fully developed (Poiseuille) inflow: parabolic profile along the inward normal, mean velocity 1 over each connected inlet segment (1.5 at its centre). |
@@ -167,7 +170,6 @@ A `*.bofl` entry for the group overrides both the name and the declared type.
 
 | Keyword | Flag | Aliases | Meaning |
 | :--- | :---: | :--- | :--- |
-| `periodic` | – | `cyclic`, `cyclic_ami`, `periodicity` | Periodic / cyclic boundary pair. |
 | `farfield` | – | `far_field`, `freestream`, `free_stream` | Far-field / free-stream boundary. |
 | `pressure_inlet` | – | `total_pressure_inlet`, `stagnation_inlet`, `stagnation_pressure_inlet`, `inlet_total_pressure`, `pressure_inflow` | Total (stagnation) pressure inlet. |
 | `mass_flow_inlet` | – | `massflow_inlet`, `mass_flow_rate_inlet`, `mass_inflow` | Prescribed mass flow rate inlet. |
@@ -274,10 +276,13 @@ Physical Surface("fluid")        = {1};
 | Code | Type | Code | Type |
 | :---: | :--- | :---: | :--- |
 | 500 | `wall` | 504 | `outlet` |
-| 501 | `wall_hot` | 505 | unassigned (kept with a warning) |
+| 501 | `wall_hot` | 505 | `periodic` |
 | 502 | `wall_cold` | 506 | `symmetry` |
 | 503 | `inlet` | 507 | `inlet_profile` |
 | | | 508 | `inlet_parabolic` |
+| | | 509 | `moving_wall` |
+| | | 510 | `rotating` |
+| | | 511 | unassigned (kept with a warning) |
 
 - **Legacy cases** (`constant/<case>.mesh`) are unchanged. `constant/<case>.bofl` maps each side id to a code, and
   codes outside 500–508 give a warning. (Code 508 was unassigned before `inlet_parabolic`: a legacy `*.bofl` that used it as a private code now gets the parabolic inflow.)
@@ -308,13 +313,13 @@ Physical Surface("fluid")        = {1};
 | `physical group 'airfoil' (tag 3): ... contains no boundary keyword` | Rename it (e.g. `airfoil_wall`) or add `3 500` to `constant/<case>.bofl` (for SU2: 3 = the third marker). |
 | `physical group 'inlet_wall' (tag 2): ... is ambiguous: it matches inlet and wall` | Rename so that the name contains one boundary keyword. |
 | `physical group 4 (unnamed): the group has no name` | Name the group, or add a `*.bofl` entry for tag 4. |
-| `physical group 'periodic_left' (tag 5) is a 'periodic' boundary ..., which HydraMa2D does not implement yet` | Not yet possible. Choose an implemented type. |
+| `physical group 'farfield_1' (tag 5) is a 'farfield' boundary ..., which HydraMa2D does not implement yet` | Not yet possible. Choose an implemented type. |
 | `N boundary line elements are in no physical group` | Add the curves to a named `Physical Curve`. |
 | `N boundary edges have no line element` | Same. Since Gmsh saves only elements in physical groups, the curve is in none. |
 | `... (wall) and in ... (outlet), which define different boundary conditions` | A curve is in two conflicting groups. Remove it from one. |
 | `... the name means inlet, but CGNS BCType BCWall means wall` | The CGNS name and BCType disagree. Fix one of them, or add a `*.bofl` entry. |
 | `... lies inside the domain ...; internal boundaries are not supported` | Remove the embedded curve from the boundary group. |
-| `'505' ... is numeric but not a known flag code` | Use a keyword, or a `*.bofl` entry (legacy behaviour for unknown codes). |
+| `'511' ... is numeric but not a known flag code` | Use a keyword, or a `*.bofl` entry (legacy behaviour for unknown codes). |
 
 ---
 

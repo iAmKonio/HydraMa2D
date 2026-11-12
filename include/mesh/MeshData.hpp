@@ -49,6 +49,14 @@ struct RawElement {
     std::int64_t tag = 0;                // original element tag (diagnostics only)
 };
 
+struct PeriodicLink {
+    int dim = 1;                                                  // entity dimension (1 = curve, 0 = point)
+    int entity_tag = 0;                                           // slave entity tag
+    int master_tag = 0;                                           // master entity tag
+    std::vector<double> affine;                                   // affine transformation matrix entries (optional)
+    std::vector<std::pair<std::int64_t, std::int64_t>> node_tags; // (slaveNodeTag, masterNodeTag)
+};
+
 struct MeshData {
     std::string source; // file name, for messages
     std::string format; // e.g. "Gmsh MSH 4.1 binary"
@@ -63,6 +71,9 @@ struct MeshData {
 
     // (dimension, physical tag) -> name. Unnamed groups have no entry.
     std::map<std::pair<int, int>, std::string> physical_names;
+
+    // Periodic curve / entity node-pair links (from $Periodic sections).
+    std::vector<PeriodicLink> periodic_links;
 
     // Boundary types declared by the file for a physical group (dimension,
     // tag), e.g. the CGNS BCType of a BC. build_mesh combines them with the
