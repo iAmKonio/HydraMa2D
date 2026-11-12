@@ -100,6 +100,8 @@ add_executable(hydrama2d_tests
     test_cylinder_benchmark.cpp
     test_case_mesh_check.cpp
     test_moving_wall.cpp
+    test_skin_friction.cpp
+    test_spectral.cpp
 )
 target_link_libraries(hydrama2d_tests PRIVATE hydrama2d_core Catch2::Catch2WithMain)
 target_compile_options(hydrama2d_tests PRIVATE ${HYDRAMA2D_COMPILE_OPTIONS})

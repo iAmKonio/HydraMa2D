@@ -108,6 +108,8 @@ add_library(hydrama2d_core STATIC
     src/post/Forces.cpp
     src/post/Monitors.cpp
     src/post/Probes.cpp
+    src/post/SkinFriction.cpp
+    src/post/Spectral.cpp
     src/turbulence/SpalartAllmaras.cpp
     src/turbulence/TurbulenceBC.cpp
     src/turbulence/TurbulenceConfig.cpp

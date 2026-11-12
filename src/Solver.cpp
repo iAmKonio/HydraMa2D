@@ -206,6 +206,11 @@ void Solver::record_monitors(int iitime, bool force) {
                                        transient ? &dvdt_ : nullptr);
     has_sample_ = true;
     last_sampled_step_ = iitime;
+    if (monitors_->has_body()) {
+        monitor_time_history_.push_back(rtime_);
+        monitor_cl_history_.push_back(last_sample_.cl);
+        monitor_cd_history_.push_back(last_sample_.cd);
+    }
     monitors_file_ << monitors_->format_row(iitime, rtime_, last_sample_);
     monitors_file_.flush();
 }
@@ -546,11 +551,34 @@ void Solver::run() {
         line << std::setprecision(8) << " Monitors (last sample): cd " << last_sample_.cd << ", cl " << last_sample_.cl
              << " (surface: cd " << last_sample_.cd_surface << ", cl " << last_sample_.cl_surface << ")\n";
         std::cout << line.str();
+
+        if (monitor_time_history_.size() >= 20 && config_.control.transient_on > 0) {
+            const auto shedding = analyze_shedding();
+            if (shedding.is_periodic) {
+                const std::string bname = monitors_->config().body.empty() ? "body" : monitors_->config().body.front();
+                std::cout << post::format_spectral_report(shedding, bname);
+            }
+        }
     }
 
     auto t_final = std::chrono::steady_clock::now();
     double total_sec = std::chrono::duration<double>(t_final - t_start).count();
     std::cout << " Time Taken (s): " << total_sec << "\n";
+}
+
+post::SheddingAnalysis Solver::analyze_shedding(double t_transient) const {
+    if (!monitors_ || monitor_time_history_.size() < 10) return {};
+    return post::analyze_shedding(monitor_time_history_, monitor_cl_history_, monitor_cd_history_,
+                                  monitors_->config().reference_length,
+                                  monitors_->config().reference_velocity,
+                                  t_transient);
+}
+
+std::vector<post::RecirculationBubble> Solver::detect_recirculation(const std::string& patch_name, double u_ref) const {
+    const auto sides = post::resolve_wall_sides(mesh_, patch_name);
+    if (sides.empty()) return {};
+    const auto profile = post::extract_skin_friction(mesh_, sides, ani_, u_, v_, p_, u_ref);
+    return post::find_recirculation_bubbles(profile);
 }
 
 } // namespace hydrama

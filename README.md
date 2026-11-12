@@ -179,6 +179,8 @@ HydraMa.dev/
 │   ├── test_quad_solver.cpp      # Solver runs on quadrilateral and hybrid meshes
 │   ├── test_parabolic_inlet.cpp  # Fully developed inflow (508)
 │   ├── test_moving_wall.cpp      # Translating (509) and rotating (510) walls, lid-driven cavity
+│   ├── test_skin_friction.cpp    # Skin friction Cf(x), separation & recirculation bubble detection
+│   ├── test_spectral.cpp         # FFT, limit-cycle detection, Strouhal number (Re=100 cylinder)
 │   ├── test_forces.cpp           # Body forces against closed-form values
 │   ├── test_probes.cpp           # Point location and interpolation
 │   ├── test_monitors.cpp         # *.monitors parser, data file, solver integration
@@ -370,6 +372,8 @@ ctest --test-dir build -R "[Nn]ormal"        # run tests whose name matches a (c
 | `[quad]` | `q1::*`, `Mesh` with quadrilaterals, `MeshBuilder`, CBS steps, `Solver` | partition of unity and Kronecker property of the shape functions, Jacobians / areas / gradients of affine and distorted elements, orientation repair and rejection of non-convex / degenerate elements, Mesh quantities (mass, Laplacian, sizes, normals, wall geometry) of quadrilateral and hybrid meshes vs. independent references, patch tests on regular and irregular (valence ≠ 4) meshes, second-order convergence of the Laplacian, Poiseuille flow on quadrilateral / hybrid / inflation-layer meshes, Gmsh / SU2 / CGNS quadrilateral fixtures, every turbulence model on a hybrid mesh, determinism |
 | `[inlet_parabolic]` | `parabolic_inlet_velocities`, `apply_velocity_bcs` | Poiseuille profile (mean 1, peak 1.5) along the inward normal for any side order and rotated meshes, separate segments, closed / branching / zero-length inlets, condition order 507 → 503 → 508 → walls, a channel that stays fully developed (inflow flux, symmetry) |
 | `[moving_wall]` | `moving_wall_velocities`, `apply_velocity_bcs`, `*.walls` | Translating wall (u, v), rotating wall (omega x r, auto-centering and explicit center), corner treatment (corners_zero), *.walls configuration parser, 2D lid-driven cavity simulation at Re = 100 |
+| `[post][skin_friction]` | `extract_skin_friction`, `find_recirculation_bubbles` | Exact Couette skin friction on triangles and quads, automated root-finding for separation (x_sep) and reattachment (x_reatt), backward-facing step reattachment length (x_r / h ~ 6.0) |
+| `[post][spectral]` | `compute_spectrum`, `analyze_shedding` | Radix-2 Cooley-Tukey FFT, Hann windowing, automated limit-cycle detector, shedding frequency, Strouhal number (unbounded Re=100 cylinder St ~ 0.165, channel cylinder St ~ 0.25), mean drag and lift RMS |
 | `[post][forces]` | `surface_force`, `volume_force` | Couette flow exact with both forms on distorted triangle / quadrilateral / hybrid meshes, volume-form identities on a closed body (linear pressure, du/dt, convection vs. an independent 3 × 3 Gauss rule), first-order surface form for Poiseuille flow, rotation invariance, side orientation, validation |
 | `[post][probes]` | `locate_point`, `interpolate` | exact for linear fields (and bilinear fields on parallelograms), nodes, edges, boundary, holes, points outside |
 | `[post][monitors]` | `*.monitors` parser, `Monitors`, `Solver` | every key and error (with line numbers), bodies by name / tag / side id incl. sides in two groups, probes, data file format, results bit-identical with and without monitors, restart appends, solver errors |
