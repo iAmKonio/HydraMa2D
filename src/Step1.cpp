@@ -1,4 +1,5 @@
 #include "Step1.hpp"
+#include "numerics/OpenMP.hpp"
 
 #include <stdexcept>
 
@@ -21,7 +22,7 @@ void step1_kernel(const Mesh& mesh,
     rhs_u.assign(mesh.npoin, 0.0);
     rhs_v.assign(mesh.npoin, 0.0);
 
-    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+    auto process_triangle = [&](int ie) {
         int ipn[3] = {mesh.intma[ie][0], mesh.intma[ie][1], mesh.intma[ie][2]};
         double lu[3] = {u[ipn[0]], u[ipn[1]], u[ipn[2]]};
         double lv[3] = {v[ipn[0]], v[ipn[1]], v[ipn[2]]};
@@ -100,6 +101,19 @@ void step1_kernel(const Mesh& mesh,
             rhs_u[ip] += lrhs_u[in];
             rhs_v[ip] += lrhs_v[in];
         }
+    };
+
+    if (!mesh.triangle_color_groups.empty()) {
+        for (const auto& grp : mesh.triangle_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_triangle(grp[i]);
+            }
+        }
+    } else {
+        for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+            process_triangle(ie);
+        }
     }
 
     // Bilinear quadrilaterals: the same weak form, 2 x 2 Gauss-Legendre
@@ -108,7 +122,7 @@ void step1_kernel(const Mesh& mesh,
     //   - dt/2 int (u_c . grad N_a) (u_c . grad) u          u_c: element-centre velocity
     //   - nu int grad N_a . grad u    [- nu_t int grad N_a . (grad u + grad u^T)]
     const auto& shape = q1::gauss_shape();
-    for (int q = 0; q < mesh.num_quads(); ++q) {
+    auto process_quad = [&](int q) {
         const int ie = mesh.element_of_quad(q);
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
         const QuadGeometry& geo = mesh.quad_geom[static_cast<std::size_t>(q)];
@@ -156,6 +170,19 @@ void step1_kernel(const Mesh& mesh,
         for (int a = 0; a < 4; ++a) {
             rhs_u[n[a]] += lrhs_u[a];
             rhs_v[n[a]] += lrhs_v[a];
+        }
+    };
+
+    if (!mesh.quad_color_groups.empty()) {
+        for (const auto& grp : mesh.quad_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_quad(grp[i]);
+            }
+        }
+    } else {
+        for (int q = 0; q < mesh.num_quads(); ++q) {
+            process_quad(q);
         }
     }
 }

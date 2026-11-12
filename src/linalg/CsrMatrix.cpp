@@ -1,4 +1,5 @@
 #include "linalg/CsrMatrix.hpp"
+#include "numerics/OpenMP.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -67,6 +68,8 @@ void CsrMatrix::apply(ConstVectorView x, VectorView y) const {
     const int* const ptr = pattern_->row_ptr().data();
     const int* const col = pattern_->col_idx().data();
     const double* const val = values_.data();
+
+    #pragma omp parallel for schedule(static) if(n > 512)
     for (int i = 0; i < n; ++i) {
         double s = 0.0;
         for (int k = ptr[i]; k < ptr[i + 1]; ++k) s += val[k] * x[col[k]];
@@ -78,8 +81,10 @@ void CsrMatrix::diagonal(VectorView d) const {
     if (d.size() != size()) throw std::invalid_argument("CsrMatrix::diagonal: size mismatch");
     if (!pattern_) return;
     const std::vector<int>& pos = pattern_->diagonal_positions();
-    for (std::size_t i = 0; i < d.size(); ++i) {
-        d[i] = (i < pos.size() && pos[i] >= 0) ? values_[pos[i]] : 0.0;
+    const int n = static_cast<int>(d.size());
+    #pragma omp parallel for schedule(static) if(n > 1024)
+    for (int i = 0; i < n; ++i) {
+        d[i] = (i < static_cast<int>(pos.size()) && pos[i] >= 0) ? values_[pos[i]] : 0.0;
     }
 }
 
@@ -90,7 +95,9 @@ double CsrMatrix::coeff(int i, int j) const {
 }
 
 void CsrMatrix::set_zero() {
-    std::fill(values_.begin(), values_.end(), 0.0);
+    const std::size_t n = values_.size();
+    #pragma omp parallel for schedule(static) if(n > 2048)
+    for (std::size_t i = 0; i < n; ++i) values_[i] = 0.0;
 }
 
 bool CsrMatrix::is_symmetric(double tol) const {
@@ -131,6 +138,7 @@ void constrain(const CsrMatrix& a, const DirichletConstraints& constraints, CsrM
     const auto& col = p.col_idx();
     const std::vector<double>& av = a.values();
     std::vector<double>& ov = out.values();
+    #pragma omp parallel for schedule(static) if(p.rows() > 512)
     for (int i = 0; i < p.rows(); ++i) {
         for (int k = ptr[i]; k < ptr[i + 1]; ++k) {
             const int j = col[k];

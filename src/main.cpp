@@ -3,6 +3,7 @@
 #include "Solver.hpp"
 #include "mesh/BoundaryNaming.hpp"
 #include "mesh/CgnsReader.hpp"
+#include "numerics/OpenMP.hpp"
 
 #include <iostream>
 #include <string>
@@ -88,6 +89,13 @@ int main(int argc, char* argv[]) {
               << (hydrama::mesh::cgns_support_available() ? ", CGNS (CGNS " + hydrama::mesh::cgns_library_version() + ")"
                                                            : std::string(" (built without CGNS)"))
               << "\n";
+    std::cout << "  OpenMP Threads: " << hydrama::get_max_threads()
+#ifdef HYDRAMA2D_OPENMP
+              << " (OpenMP enabled)"
+#else
+              << " (serial build, OpenMP disabled)"
+#endif
+              << "\n";
     std::cout << "--------------------------------------------------------------\n";
     std::cout << "==============================================================\n";
 
@@ -111,6 +119,7 @@ int main(int argc, char* argv[]) {
     std::optional<double> cli_v;
     std::optional<int> cli_max_steps;
     std::optional<double> cli_re;
+    std::optional<int> cli_threads;
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
@@ -126,7 +135,14 @@ int main(int argc, char* argv[]) {
             cli_max_steps = std::stoi(argv[++i]);
         } else if (arg == "--re" && i + 1 < argc) {
             cli_re = std::stod(argv[++i]);
+        } else if ((arg == "--threads" || arg == "-t") && i + 1 < argc) {
+            cli_threads = std::stoi(argv[++i]);
         }
+    }
+
+    if (cli_threads.has_value() && *cli_threads > 0) {
+        hydrama::set_num_threads(*cli_threads);
+        std::cout << " Configured thread count: " << hydrama::get_max_threads() << "\n";
     }
 
     hydrama::SimulationConfig config;

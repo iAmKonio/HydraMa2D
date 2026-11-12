@@ -4,6 +4,7 @@
 #include "linalg/ConstrainedOperator.hpp"
 #include "linalg/EbeOperator.hpp"
 #include "linalg/JacobiPreconditioner.hpp"
+#include "numerics/OpenMP.hpp"
 
 #include <cmath>
 #include <algorithm>
@@ -38,8 +39,12 @@ void update_lhs(const Mesh& mesh,
     for (int q = 0; q < mesh.num_quads(); ++q) {
         const double dt = delte[mesh.element_of_quad(q)];
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
-        for (int a = 0; a < Mesh::nep_quad; ++a) elcoe2[n[a]] += mesh.quad_geom[static_cast<std::size_t>(q)].mass[a] / dt;
+        for (int a = 0; a < Mesh::nep_quad; ++a) {
+            elcoe2[n[a]] += mesh.quad_geom[static_cast<std::size_t>(q)].mass[a] / dt;
+        }
     }
+
+    #pragma omp parallel for schedule(static)
     for (int ip = 0; ip < mesh.npoin; ++ip) {
         elcoe2[ip] = 1.0 / elcoe2[ip];
     }
@@ -48,24 +53,24 @@ void update_lhs(const Mesh& mesh,
     pdiag.assign(mesh.npoin, 0.0);
     gstif.resize(static_cast<std::size_t>(mesh.num_offdiag_blocks()));
 
+    #pragma omp parallel for schedule(static)
     for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         double dt = delte[ie];
-
-        // Off-diagonals
         gstif[ie][0] = mesh.gstifE[ie][0] * dt;
         gstif[ie][1] = mesh.gstifE[ie][1] * dt;
         gstif[ie][2] = mesh.gstifE[ie][2] * dt;
+    }
 
-        // Diagonal
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+        double dt = delte[ie];
         for (int in = 0; in < Mesh::nep; ++in) {
             int ip = mesh.intma[ie][in];
             pdiag[ip] += mesh.pdiagE[ie][in] * dt;
         }
     }
 
-    // Quadrilaterals: two blocks of three off-diagonal values each
-    // (pairs (0,1), (0,2), (0,3) and (1,2), (1,3), (2,3); Mesh::num_offdiag_blocks).
     const std::size_t first_quad_block = mesh.intma.size();
+    #pragma omp parallel for schedule(static)
     for (int q = 0; q < mesh.num_quads(); ++q) {
         const double dt = delte[mesh.element_of_quad(q)];
         const QuadLaplacian& k = mesh.quad_lap[static_cast<std::size_t>(q)];
@@ -73,6 +78,11 @@ void update_lhs(const Mesh& mesh,
         auto& b1 = gstif[first_quad_block + 2 * static_cast<std::size_t>(q) + 1];
         b0 = {k.off[0] * dt, k.off[1] * dt, k.off[2] * dt};
         b1 = {k.off[3] * dt, k.off[4] * dt, k.off[5] * dt};
+    }
+
+    for (int q = 0; q < mesh.num_quads(); ++q) {
+        const double dt = delte[mesh.element_of_quad(q)];
+        const QuadLaplacian& k = mesh.quad_lap[static_cast<std::size_t>(q)];
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
         for (int a = 0; a < Mesh::nep_quad; ++a) pdiag[n[a]] += k.diag[a] * dt;
     }
@@ -124,6 +134,7 @@ void timestep_kernel(int solver_opt, int dtfixed, int transient_on,
 
     double delte_min = std::numeric_limits<double>::max();
 
+    #pragma omp parallel for reduction(min:delte_min) schedule(static)
     for (int ie = 0; ie < mesh.nelem; ++ie) {
         double amin = mesh.alen_e[ie];
         const ElementNodes nodes = mesh.element_nodes(ie);

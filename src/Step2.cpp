@@ -1,4 +1,5 @@
 #include "Step2.hpp"
+#include "numerics/OpenMP.hpp"
 
 namespace hydrama {
 
@@ -11,7 +12,7 @@ void compute_step2(const Mesh& mesh,
                    std::vector<double>& rhs1) {
     rhs1.assign(mesh.npoin, 0.0);
 
-    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+    auto process_triangle = [&](int ie) {
         int ipn[3] = {mesh.intma[ie][0], mesh.intma[ie][1], mesh.intma[ie][2]};
 
         double lu_star[3] = {u_star[ipn[0]], u_star[ipn[1]], u_star[ipn[2]]};
@@ -52,12 +53,25 @@ void compute_step2(const Mesh& mesh,
         for (int in = 0; in < 3; ++in) {
             rhs1[ipn[in]] += lrhs[in];
         }
+    };
+
+    if (!mesh.triangle_color_groups.empty()) {
+        for (const auto& grp : mesh.triangle_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_triangle(grp[i]);
+            }
+        }
+    } else {
+        for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+            process_triangle(ie);
+        }
     }
 
     // Bilinear quadrilaterals, 2 x 2 Gauss-Legendre:
     //   - int N_a div u^n  +  theta1 int grad N_a . (u* - u^n)
     const auto& shape = q1::gauss_shape();
-    for (int q = 0; q < mesh.num_quads(); ++q) {
+    auto process_quad = [&](int q) {
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
         const QuadGeometry& geo = mesh.quad_geom[static_cast<std::size_t>(q)];
         double un[4], vn[4], du[4], dv[4];
@@ -82,6 +96,19 @@ void compute_step2(const Mesh& mesh,
             for (int a = 0; a < 4; ++a) lrhs[a] += W * (-N[a] * div + theta1 * (dNdx[a] * dug + dNdy[a] * dvg));
         }
         for (int a = 0; a < 4; ++a) rhs1[n[a]] += lrhs[a];
+    };
+
+    if (!mesh.quad_color_groups.empty()) {
+        for (const auto& grp : mesh.quad_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_quad(grp[i]);
+            }
+        }
+    } else {
+        for (int q = 0; q < mesh.num_quads(); ++q) {
+            process_quad(q);
+        }
     }
 }
 
