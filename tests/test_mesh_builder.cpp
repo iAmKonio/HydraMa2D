@@ -442,11 +442,11 @@ TEST_CASE("build_mesh: recognised but unimplemented boundary types are rejected"
     MeshData d = square();
     d.physical_names[{1, 1}] = "periodic_bottom";
     d.physical_names[{1, 3}] = "periodic_top";
-    d.physical_names[{1, 2}] = "rotating";
+    d.physical_names[{1, 2}] = "farfield";
     const std::string err = build_error(d);
     CHECK_THAT(err, ContainsSubstring("3 problems"));
     CHECK_THAT(err, ContainsSubstring("'periodic_bottom' (tag 1) is a 'periodic' boundary"));
-    CHECK_THAT(err, ContainsSubstring("'rotating' (tag 2) is a 'rotating' boundary"));
+    CHECK_THAT(err, ContainsSubstring("'farfield' (tag 2) is a 'farfield' boundary"));
     CHECK_THAT(err, ContainsSubstring("does not implement yet"));
 
     BuildOptions o;

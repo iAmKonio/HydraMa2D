@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iostream>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -62,7 +63,8 @@ void apply_symmetry_bc(const Mesh& mesh,
 
 void apply_velocity_bcs(const Mesh& mesh,
                         std::vector<double>& u,
-                        std::vector<double>& v) {
+                        std::vector<double>& v,
+                        const std::map<int, MovingWallSpec>& wall_specs) {
     // 1. Backward Facing Step (Flag 507) - Parabolic / polynomial inflow profile
     for (int ib = 0; ib < mesh.nboun; ++ib) {
         if (mesh.iside[ib].flag == 507) {
@@ -105,11 +107,133 @@ void apply_velocity_bcs(const Mesh& mesh,
         }
     }
 
-    // 4. Wall nodes (No-Slip) - applied last to ensure corners don't leak
+    // 4. Wall nodes (No-Slip) - applied to all wall nodes
     for (int ip : mesh.wall_node_list) {
         u[ip] = 0.0;
         v[ip] = 0.0;
     }
+
+    // 5. Moving and rotating wall nodes (Flags 509, 510 or configured in wall_specs)
+    for (const NodeVelocity& nv : moving_wall_velocities(mesh, wall_specs)) {
+        u[nv.node] = nv.u;
+        v[nv.node] = nv.v;
+    }
+}
+
+std::vector<NodeVelocity> moving_wall_velocities(
+    const Mesh& mesh,
+    const std::map<int, MovingWallSpec>& wall_specs) {
+    // 1. Group boundary sides by flag for any flag that is a moving/rotating wall or in wall_specs
+    std::map<int, std::vector<int>> sides_by_flag;
+    for (int ib = 0; ib < mesh.nboun; ++ib) {
+        int flag = mesh.iside[ib].flag;
+        if (flag == flags::kMovingWall || flag == flags::kRotatingWall || wall_specs.count(flag) > 0) {
+            sides_by_flag[flag].push_back(ib);
+        }
+    }
+    if (sides_by_flag.empty()) return {};
+
+    // 2. Identify stationary wall nodes if any spec has corners_zero == true
+    bool any_corners_zero = false;
+    for (const auto& [flag, sides] : sides_by_flag) {
+        auto it = wall_specs.find(flag);
+        if (it != wall_specs.end() && it->second.corners_zero) {
+            any_corners_zero = true;
+            break;
+        }
+    }
+
+    std::set<int> stationary_wall_nodes;
+    if (any_corners_zero) {
+        for (int ib = 0; ib < mesh.nboun; ++ib) {
+            int flag = mesh.iside[ib].flag;
+            if (is_wall_flag(flag) && sides_by_flag.find(flag) == sides_by_flag.end()) {
+                stationary_wall_nodes.insert(mesh.iside[ib].node1);
+                stationary_wall_nodes.insert(mesh.iside[ib].node2);
+            }
+        }
+    }
+
+    // 3. Compute velocities per node
+    std::map<int, NodeVelocity> node_vel_map;
+
+    for (const auto& [flag, sides] : sides_by_flag) {
+        MovingWallSpec spec;
+        auto it = wall_specs.find(flag);
+        if (it != wall_specs.end()) {
+            spec = it->second;
+        } else if (flag == flags::kMovingWall) {
+            spec.kind = MovingWallSpec::Kind::Translating;
+            spec.u = 1.0;
+            spec.v = 0.0;
+        } else if (flag == flags::kRotatingWall) {
+            spec.kind = MovingWallSpec::Kind::Rotating;
+            spec.omega = 1.0;
+            spec.auto_center = true;
+        }
+
+        double cx = spec.center_x;
+        double cy = spec.center_y;
+
+        if (spec.kind == MovingWallSpec::Kind::Rotating && spec.auto_center) {
+            double total_len = 0.0;
+            double sum_x = 0.0, sum_y = 0.0;
+            for (int ib : sides) {
+                int n1 = mesh.iside[ib].node1;
+                int n2 = mesh.iside[ib].node2;
+                double x1 = mesh.x[n1], y1 = mesh.y[n1];
+                double x2 = mesh.x[n2], y2 = mesh.y[n2];
+                double len = std::hypot(x2 - x1, y2 - y1);
+                total_len += len;
+                sum_x += 0.5 * (x1 + x2) * len;
+                sum_y += 0.5 * (y1 + y2) * len;
+            }
+            if (total_len > 0.0) {
+                cx = sum_x / total_len;
+                cy = sum_y / total_len;
+            } else {
+                std::set<int> unique_nodes;
+                for (int ib : sides) {
+                    unique_nodes.insert(mesh.iside[ib].node1);
+                    unique_nodes.insert(mesh.iside[ib].node2);
+                }
+                if (!unique_nodes.empty()) {
+                    cx = 0.0;
+                    cy = 0.0;
+                    for (int ip : unique_nodes) {
+                        cx += mesh.x[ip];
+                        cy += mesh.y[ip];
+                    }
+                    cx /= static_cast<double>(unique_nodes.size());
+                    cy /= static_cast<double>(unique_nodes.size());
+                }
+            }
+        }
+
+        for (int ib : sides) {
+            int nodes[2] = {mesh.iside[ib].node1, mesh.iside[ib].node2};
+            for (int in = 0; in < 2; ++in) {
+                int ip = nodes[in];
+                if (spec.corners_zero && stationary_wall_nodes.count(ip) > 0) {
+                    node_vel_map[ip] = {ip, 0.0, 0.0};
+                } else if (spec.kind == MovingWallSpec::Kind::Translating) {
+                    node_vel_map[ip] = {ip, spec.u, spec.v};
+                } else { // Rotating
+                    double dx = mesh.x[ip] - cx;
+                    double dy = mesh.y[ip] - cy;
+                    // u = -omega * (y - cy), v = omega * (x - cx)
+                    node_vel_map[ip] = {ip, -spec.omega * dy, spec.omega * dx};
+                }
+            }
+        }
+    }
+
+    std::vector<NodeVelocity> out;
+    out.reserve(node_vel_map.size());
+    for (const auto& [node, nv] : node_vel_map) {
+        out.push_back(nv);
+    }
+    return out;
 }
 
 std::vector<NodeVelocity> parabolic_inlet_velocities(const Mesh& mesh) {

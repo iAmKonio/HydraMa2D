@@ -30,7 +30,9 @@ TEST_CASE("BoundaryKind: flag code table", "[boundary_kind]") {
     CHECK(classify_boundary_flag(506) == BoundaryKind::Symmetry);
     CHECK(classify_boundary_flag(507) == BoundaryKind::Inlet);
     CHECK(classify_boundary_flag(508) == BoundaryKind::Inlet);
-    for (int unknown : {0, -1, 499, 505, 509, 600}) {
+    CHECK(classify_boundary_flag(509) == BoundaryKind::Wall);
+    CHECK(classify_boundary_flag(510) == BoundaryKind::Wall);
+    for (int unknown : {0, -1, 499, 505, 511, 600}) {
         INFO("flag " << unknown);
         CHECK(classify_boundary_flag(unknown) == BoundaryKind::Unknown);
         CHECK_FALSE(is_wall_flag(unknown));
@@ -43,6 +45,8 @@ TEST_CASE("BoundaryKind: flag code table", "[boundary_kind]") {
     CHECK(flags::kSymmetry == 506);
     CHECK(flags::kInletProfile == 507);
     CHECK(flags::kInletParabolic == 508);
+    CHECK(flags::kMovingWall == 509);
+    CHECK(flags::kRotatingWall == 510);
 }
 
 TEST_CASE("BoundaryKind: names", "[boundary_kind]") {
@@ -54,7 +58,7 @@ TEST_CASE("BoundaryKind: names", "[boundary_kind]") {
 }
 
 TEST_CASE("BoundaryKind agrees with the legacy boundary routines", "[boundary_kind]") {
-    const int flag = GENERATE(0, 499, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509);
+    const int flag = GENERATE(0, 499, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509, 510);
     const BoundaryKind kind = classify_boundary_flag(flag);
     INFO("flag " << flag << " (" << to_string(kind) << ")");
 

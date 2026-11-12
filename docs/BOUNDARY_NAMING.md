@@ -33,13 +33,15 @@ separator:
 | symmetry / free slip (u·n = 0) | `symmetry`, `Symmetry Plane`, `slip_wall` | 506 |
 | backward-facing-step inflow profile | `inlet_profile` | 507 |
 | fully developed (parabolic) inflow, mean velocity 1 | `parabolic_inlet`, `inlet_parabolic`, `poiseuille_inlet` | 508 |
+| wall translating with prescribed velocity (e.g. lid) | `moving_wall`, `sliding_wall`, `lid` | 509 |
+| wall rotating with prescribed angular velocity | `rotating`, `rotating_wall`, `rotor` | 510 |
 | wall tagged T = 1 / T = 0 | `wall_hot` / `wall_cold` | 501 / 502 |
 
 The canonical keywords are `wall`, `inlet`, `outlet`, `symmetry`, `periodic`, `rotating`, `moving_wall`, `farfield`
 and the others in the [tables below](#3-the-tables). Each has aliases (e.g. `no_slip`, `inflow`, `outflow`,
 `symmetryPlane`, `cyclic`, `rotor`, `freestream`).
 
-Types in the second table (`periodic`, `rotating`, `farfield`, ...) are **recognised but not implemented**. A mesh
+Types in the second table (`periodic`, `farfield`, ...) are **recognised but not implemented**. A mesh
 that uses one is rejected with a clear message. It is never run with a wrong condition.
 
 ---
@@ -158,14 +160,14 @@ A `*.bofl` entry for the group overrides both the name and the declared type.
 | `symmetry` | 506 | `sym`, `symm`, `symmetric`, `symmetry_plane`, `symmetry_line`, `mirror`, `slip`, `slip_wall`, `free_slip`, `freeslip`, `inviscid_wall`, `euler_wall` | Symmetry line / free-slip wall, u . n = 0. |
 | `inlet_profile` | 507 | `profile_inlet`, `step_inlet`, `bfs_inlet`, `inlet_bfs` | Backward-facing-step inflow: fixed 6th-order polynomial u(y), v = 0. |
 | `inlet_parabolic` | 508 | `parabolic_inlet`, `parabolic_inflow`, `poiseuille_inlet`, `inlet_poiseuille`, `fully_developed_inlet`, `developed_inlet` | Fully developed (Poiseuille) inflow: parabolic profile along the inward normal, mean velocity 1 over each connected inlet segment (1.5 at its centre). |
+| `moving_wall` | 509 | `moving`, `sliding_wall`, `translating_wall`, `lid`, `moving_lid` | Wall translating with a prescribed tangential velocity (e.g. a cavity lid). |
+| `rotating` | 510 | `rotating_wall`, `rotor`, `spinning_wall` | Wall rotating about an axis (prescribed angular velocity). |
 
 ### Recognised, not implemented (the mesh is rejected)
 
 | Keyword | Flag | Aliases | Meaning |
 | :--- | :---: | :--- | :--- |
 | `periodic` | – | `cyclic`, `cyclic_ami`, `periodicity` | Periodic / cyclic boundary pair. |
-| `rotating` | – | `rotating_wall`, `rotor`, `spinning_wall` | Wall rotating about an axis (prescribed angular velocity). |
-| `moving_wall` | – | `moving`, `sliding_wall`, `translating_wall`, `lid`, `moving_lid` | Wall translating with a prescribed tangential velocity (e.g. a cavity lid). |
 | `farfield` | – | `far_field`, `freestream`, `free_stream` | Far-field / free-stream boundary. |
 | `pressure_inlet` | – | `total_pressure_inlet`, `stagnation_inlet`, `stagnation_pressure_inlet`, `inlet_total_pressure`, `pressure_inflow` | Total (stagnation) pressure inlet. |
 | `mass_flow_inlet` | – | `massflow_inlet`, `mass_flow_rate_inlet`, `mass_inflow` | Prescribed mass flow rate inlet. |

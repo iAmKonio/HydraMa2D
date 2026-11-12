@@ -1,7 +1,9 @@
 #include "IO.hpp"
+#include "BoundaryKind.hpp"
 
 #include "linalg/Factory.hpp"
 #include "linalg/Reordering.hpp"
+#include "mesh/BoundaryNaming.hpp"
 #include "mesh/GmshReader.hpp"
 #include "mesh/MeshBuilder.hpp"
 #include "mesh/CgnsReader.hpp"
@@ -260,6 +262,189 @@ bool IO::read_turbulence(const std::string& filepath, TurbulenceConfig& config) 
     return true;
 }
 
+bool IO::read_walls(const std::string& filepath, std::map<int, MovingWallSpec>& wall_specs) {
+    std::string error;
+    if (!read_walls_config(filepath, wall_specs, error)) {
+        std::cerr << "ERROR: *.walls FILE HAS INVALID FORMAT: " << error << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool IO::read_walls_config(const std::string& filepath,
+                           std::map<int, MovingWallSpec>& wall_specs,
+                           std::string& error) {
+    wall_specs.clear();
+    error.clear();
+    std::error_code ec;
+    if (!std::filesystem::exists(filepath, ec)) {
+        return true;
+    }
+    std::ifstream in(filepath);
+    if (!in.is_open()) {
+        error = "cannot open " + filepath;
+        return false;
+    }
+
+    std::string line;
+    int line_number = 0;
+    while (std::getline(in, line)) {
+        ++line_number;
+        auto hash_pos = line.find('#');
+        if (hash_pos != std::string::npos) line.erase(hash_pos);
+        auto slash_pos = line.find("//");
+        if (slash_pos != std::string::npos) line.erase(slash_pos);
+
+        std::istringstream iss(line);
+        std::vector<std::string> tokens;
+        std::string token;
+        while (iss >> token) {
+            tokens.push_back(token);
+        }
+        if (tokens.empty()) continue;
+
+        std::size_t idx = 0;
+        if (tokens[idx] == "wall" || tokens[idx] == "boundary") {
+            ++idx;
+            if (idx >= tokens.size()) {
+                error = filepath + ":" + std::to_string(line_number) + ": expected boundary name or flag after '" + tokens[0] + "'";
+                return false;
+            }
+        }
+
+        std::string bname = tokens[idx++];
+        int flag = -1;
+        try {
+            std::size_t pos = 0;
+            int val = std::stoi(bname, &pos);
+            if (pos == bname.size()) {
+                flag = val;
+            }
+        } catch (...) {}
+
+        if (flag < 0) {
+            std::string lower = bname;
+            for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (lower == "moving" || lower == "moving_wall" || lower == "lid" || lower == "moving_lid") {
+                flag = flags::kMovingWall;
+            } else if (lower == "rotating" || lower == "rotating_wall" || lower == "rotor") {
+                flag = flags::kRotatingWall;
+            } else {
+                const auto res = mesh::resolve_boundary_name(bname);
+                if (res.resolved()) {
+                    auto sf = mesh::solver_flag(res.type);
+                    if (sf.has_value()) {
+                        flag = *sf;
+                    }
+                }
+                if (flag < 0) {
+                    error = filepath + ":" + std::to_string(line_number) + ": unknown boundary '" + bname + "'";
+                    return false;
+                }
+            }
+        }
+
+        MovingWallSpec spec;
+        if (flag == flags::kRotatingWall) {
+            spec.kind = MovingWallSpec::Kind::Rotating;
+            spec.omega = 1.0;
+            spec.auto_center = true;
+        } else {
+            spec.kind = MovingWallSpec::Kind::Translating;
+            spec.u = 1.0;
+            spec.v = 0.0;
+        }
+
+        while (idx < tokens.size()) {
+            std::string key = tokens[idx++];
+            for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            if (key == "translating" || key == "moving" || key == "translation") {
+                spec.kind = MovingWallSpec::Kind::Translating;
+            } else if (key == "rotating" || key == "rotation") {
+                spec.kind = MovingWallSpec::Kind::Rotating;
+            } else if (key == "u") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for 'u'";
+                    return false;
+                }
+                try {
+                    spec.u = std::stod(tokens[idx++]);
+                } catch (...) {
+                    error = filepath + ":" + std::to_string(line_number) + ": invalid value for 'u'";
+                    return false;
+                }
+                spec.kind = MovingWallSpec::Kind::Translating;
+            } else if (key == "v") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for 'v'";
+                    return false;
+                }
+                try {
+                    spec.v = std::stod(tokens[idx++]);
+                } catch (...) {
+                    error = filepath + ":" + std::to_string(line_number) + ": invalid value for 'v'";
+                    return false;
+                }
+                spec.kind = MovingWallSpec::Kind::Translating;
+            } else if (key == "omega" || key == "w") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for 'omega'";
+                    return false;
+                }
+                try {
+                    spec.omega = std::stod(tokens[idx++]);
+                } catch (...) {
+                    error = filepath + ":" + std::to_string(line_number) + ": invalid value for 'omega'";
+                    return false;
+                }
+                spec.kind = MovingWallSpec::Kind::Rotating;
+            } else if (key == "center" || key == "origin") {
+                if (idx + 1 >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": 'center' requires two coordinates (x y)";
+                    return false;
+                }
+                try {
+                    spec.center_x = std::stod(tokens[idx++]);
+                    spec.center_y = std::stod(tokens[idx++]);
+                    spec.auto_center = false;
+                } catch (...) {
+                    error = filepath + ":" + std::to_string(line_number) + ": invalid coordinates for 'center'";
+                    return false;
+                }
+                spec.kind = MovingWallSpec::Kind::Rotating;
+            } else if (key == "center_x") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for 'center_x'";
+                    return false;
+                }
+                spec.center_x = std::stod(tokens[idx++]);
+                spec.auto_center = false;
+                spec.kind = MovingWallSpec::Kind::Rotating;
+            } else if (key == "center_y") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for 'center_y'";
+                    return false;
+                }
+                spec.center_y = std::stod(tokens[idx++]);
+                spec.auto_center = false;
+                spec.kind = MovingWallSpec::Kind::Rotating;
+            } else if (key == "auto_center") {
+                spec.auto_center = true;
+                spec.kind = MovingWallSpec::Kind::Rotating;
+            } else if (key == "corners_zero" || key == "corner_zero") {
+                spec.corners_zero = true;
+            } else {
+                error = filepath + ":" + std::to_string(line_number) + ": unknown keyword '" + key + "'";
+                return false;
+            }
+        }
+
+        wall_specs[flag] = spec;
+    }
+    return true;
+}
+
 bool IO::read_case_mesh(const std::string& constant_dir, const std::string& casename, Mesh& mesh) {
     MeshFileLocation mesh_file;
     if (!locate_mesh_file(constant_dir, casename, mesh_file)) return false;
@@ -399,7 +584,7 @@ bool IO::read_boundary_flags(const std::string& filepath, Mesh& mesh) {
     for (int i = 0; i < nflag; ++i) {
         in >> flag_list[i].first >> flag_list[i].second;
         int code = flag_list[i].second;
-        if (code < 500 || code > 508) {
+        if (code < 500 || code > 510) {
             std::cout << "WARNING: BOUNDARY FLAG CODE IN FILE DOES NOT MATCH KNOWN TYPES: " << code << "\n";
         }
     }
