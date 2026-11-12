@@ -1,6 +1,7 @@
 #include "Solver.hpp"
 #include "IO.hpp"
 #include "mesh/MeshQuality.hpp"
+#include "numerics/ScalarTransport.hpp"
 #include "Step1.hpp"
 #include "Step2.hpp"
 #include "Step3.hpp"
@@ -148,6 +149,25 @@ bool Solver::initialize() {
     pdiag_.resize(npoin);
     gstif_.resize(static_cast<std::size_t>(mesh_.num_offdiag_blocks()));
 
+    // Read optional thermal configuration if not already set programmatically
+    if (!thermal_config_.enabled) {
+        if (config_.thermal.enabled) {
+            thermal_config_ = config_.thermal;
+        } else {
+            const std::string thermal_file = prefix + "system/" + config_.casename + ".thermal";
+            std::error_code ec;
+            if (std::filesystem::exists(thermal_file, ec)) {
+                if (!IO::read_thermal(thermal_file, thermal_config_)) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    if (thermal_config_.enabled && !initialize_thermal(prefix, restarted)) {
+        return false;
+    }
+
     if (turbulence_ && !initialize_turbulence(prefix, restarted)) {
         return false;
     }
@@ -273,11 +293,74 @@ bool Solver::initialize_turbulence(const std::string& prefix, bool restarted) {
     return true;
 }
 
+bool Solver::initialize_thermal(const std::string& prefix, bool restarted) {
+    T_.assign(mesh_.npoin, thermal_config_.t_init);
+    T_old_ = T_;
+    rhs_T_.assign(mesh_.npoin, 0.0);
+    alpha_elem_.assign(mesh_.nelem, ani_ / thermal_config_.prandtl);
+
+    if (restarted) {
+        const std::string path = prefix + "results/" + config_.casename + ".thermal.var";
+        std::string error;
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec)) {
+            if (!IO::read_thermal_restart(path, mesh_.npoin, T_, error)) {
+                std::cout << "WARNING: Could not read thermal restart file: " << error
+                          << ". Initializing temperature with default values.\n";
+                T_.assign(mesh_.npoin, thermal_config_.t_init);
+            }
+        }
+    }
+
+    apply_thermal_bcs(mesh_, thermal_config_, T_);
+    T_old_ = T_;
+
+    std::cout << "Thermal energy: enabled (Pr = " << thermal_config_.prandtl
+              << ", Pr_t = " << thermal_config_.prandtl_turbulent;
+    if (thermal_config_.rayleigh > 0.0) {
+        std::cout << ", Ra = " << thermal_config_.rayleigh;
+    } else if (thermal_config_.beta != 0.0) {
+        std::cout << ", beta = " << thermal_config_.beta
+                  << ", g = (" << thermal_config_.gravity[0] << ", " << thermal_config_.gravity[1] << ")";
+    }
+    std::cout << ")\n";
+
+    return true;
+}
+
+void Solver::advance_temperature() {
+    if (!thermal_config_.enabled) return;
+
+    const std::vector<double>* nut = turbulence_ ? &turbulence_->nut_elem() : nullptr;
+    compute_thermal_diffusivity(mesh_, ani_, thermal_config_, nut, alpha_elem_);
+
+    T_old_ = T_;
+    assemble_scalar_transport(mesh_, u_, v_, delte_, T_, alpha_elem_, rhs_T_);
+
+    for (int ip = 0; ip < mesh_.npoin; ++ip) {
+        T_[ip] += rhs_T_[ip] * elcoe2_[ip];
+    }
+
+    apply_thermal_bcs(mesh_, thermal_config_, T_);
+}
+
 void Solver::update_effective_viscosity() {
-    const std::vector<double>& nut = turbulence_->nut_elem();
-    const std::vector<double>& gamma = turbulence_->max_diffusivity_elem();
-    for (int ie = 0; ie < mesh_.nelem; ++ie) {
-        nu_eff_elem_[ie] = std::max(ani_ + nut[ie], gamma[ie]);
+    nu_eff_elem_.resize(mesh_.nelem);
+    if (turbulence_) {
+        const std::vector<double>& nut = turbulence_->nut_elem();
+        const std::vector<double>& gamma = turbulence_->max_diffusivity_elem();
+        for (int ie = 0; ie < mesh_.nelem; ++ie) {
+            double eff = std::max(ani_ + nut[ie], gamma[ie]);
+            if (thermal_config_.enabled && ie < static_cast<int>(alpha_elem_.size())) {
+                eff = std::max(eff, alpha_elem_[ie]);
+            }
+            nu_eff_elem_[ie] = eff;
+        }
+    } else if (thermal_config_.enabled) {
+        compute_thermal_diffusivity(mesh_, ani_, thermal_config_, nullptr, alpha_elem_);
+        for (int ie = 0; ie < mesh_.nelem; ++ie) {
+            nu_eff_elem_[ie] = std::max(ani_, alpha_elem_[ie]);
+        }
     }
 }
 
@@ -313,30 +396,40 @@ void Solver::output_results(int iitime, double time_val) {
     std::string vtk_path = prefix + "results/" + config_.casename + "_" + time_str + ".vtk";
     std::string restart_path = prefix + "results/" + config_.casename + ".var";
 
-    if (!turbulence_) {
-        IO::write_vtk(vtk_path, mesh_, u_, v_, p_);
-        IO::write_restart(restart_path, time_val, iitime, config_.control.transient_on, u_, v_, p_);
-        return;
+    std::vector<NamedField> scalars;
+    if (thermal_config_.enabled) {
+        scalars.push_back({"T", &T_});
     }
 
-    // Turbulent run: model fields (transported variables, nut), wall distance
-    // and y+ as additional VTK point scalars, plus the turbulence restart file.
-    std::vector<NamedField> scalars;
-    for (const FieldRef& f : turbulence_->fields()) scalars.push_back({f.name, f.values});
     std::vector<double> yplus;
-    if (walls_.has_walls()) {
-        yplus_field(walls_, wall_friction_velocity(mesh_, walls_, u_, v_, ani_), ani_, yplus);
-        scalars.push_back({"wall_distance", &walls_.wall_distance()});
-        scalars.push_back({"yplus", &yplus});
+    if (turbulence_) {
+        for (const FieldRef& f : turbulence_->fields()) scalars.push_back({f.name, f.values});
+        if (walls_.has_walls()) {
+            yplus_field(walls_, wall_friction_velocity(mesh_, walls_, u_, v_, ani_), ani_, yplus);
+            scalars.push_back({"wall_distance", &walls_.wall_distance()});
+            scalars.push_back({"yplus", &yplus});
+        }
     }
-    IO::write_vtk(vtk_path, mesh_, u_, v_, p_, scalars);
+
+    if (scalars.empty()) {
+        IO::write_vtk(vtk_path, mesh_, u_, v_, p_);
+    } else {
+        IO::write_vtk(vtk_path, mesh_, u_, v_, p_, scalars);
+    }
     IO::write_restart(restart_path, time_val, iitime, config_.control.transient_on, u_, v_, p_);
 
-    std::vector<NamedField> state;
-    for (const FieldRef& f : turbulence_->state_fields()) state.push_back({f.name, f.values});
-    const std::string turb_path = prefix + "results/" + config_.casename + ".turb.var";
-    if (!IO::write_turbulence_restart(turb_path, std::string(turbulence_->name()), state)) {
-        std::cerr << "ERROR: CANNOT WRITE TURBULENCE RESTART FILE: " << turb_path << "\n";
+    if (thermal_config_.enabled) {
+        const std::string thermal_restart_path = prefix + "results/" + config_.casename + ".thermal.var";
+        IO::write_thermal_restart(thermal_restart_path, T_);
+    }
+
+    if (turbulence_) {
+        std::vector<NamedField> state;
+        for (const FieldRef& f : turbulence_->state_fields()) state.push_back({f.name, f.values});
+        const std::string turb_path = prefix + "results/" + config_.casename + ".turb.var";
+        if (!IO::write_turbulence_restart(turb_path, std::string(turbulence_->name()), state)) {
+            std::cerr << "ERROR: CANNOT WRITE TURBULENCE RESTART FILE: " << turb_path << "\n";
+        }
     }
 }
 
@@ -358,7 +451,7 @@ void Solver::run() {
         p_old_ = p_;
 
         // Calculate time step size
-        if (turbulence_) {
+        if (turbulence_ || thermal_config_.enabled) {
             // Diffusive limit with nu_eff = max(nu + nu_t, turbulence diffusivities).
             update_effective_viscosity();
             compute_timestep(config_.solver.solver_opt,
@@ -397,6 +490,10 @@ void Solver::run() {
             compute_step1(mesh_, ani_, turbulence_->nut_elem(), delte_, u_, v_, rhs_u_, rhs_v_);
         } else {
             compute_step1(mesh_, ani_, delte_, u_, v_, rhs_u_, rhs_v_);
+        }
+
+        if (thermal_config_.enabled) {
+            add_boussinesq_buoyancy(mesh_, thermal_config_, 1.0 / ani_, T_, rhs_u_, rhs_v_);
         }
 
         for (int ip = 0; ip < mesh_.npoin; ++ip) {
@@ -438,6 +535,13 @@ void Solver::run() {
         // ==========================================
         if (turbulence_) {
             turbulence_->advance(turbulence_context(), {u_, v_});
+        }
+
+        // ==========================================
+        // Thermal: advance with u^{n+1}
+        // ==========================================
+        if (thermal_config_.enabled) {
+            advance_temperature();
         }
 
         record_monitors(iitime);
