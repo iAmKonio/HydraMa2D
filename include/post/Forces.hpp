@@ -48,10 +48,13 @@ namespace hydrama::post {
 struct BodyForce {
     double fx = 0.0; // total force
     double fy = 0.0;
+    double mz = 0.0; // total pitching moment about reference point (z-axis, counter-clockwise / pitch-up)
     double pressure_fx = 0.0; // pressure part (surface_force only; volume_force: 0)
     double pressure_fy = 0.0;
+    double pressure_mz = 0.0;
     double viscous_fx() const { return fx - pressure_fx; }
     double viscous_fy() const { return fy - pressure_fy; }
+    double viscous_mz() const { return mz - pressure_mz; }
 };
 
 // Boundary sides of the body: indices into mesh.iside.
@@ -59,7 +62,8 @@ struct BodyForce {
 // (and quad_geom for quadrilaterals); they throw std::invalid_argument for
 // side indices out of range or field sizes different from npoin.
 BodyForce surface_force(const Mesh& mesh, const std::vector<int>& body_sides, double nu,
-                        const std::vector<double>& u, const std::vector<double>& v, const std::vector<double>& p);
+                        const std::vector<double>& u, const std::vector<double>& v, const std::vector<double>& p,
+                        double x_ref = 0.0, double y_ref = 0.0);
 
 // dudt / dvdt: the time derivative of the velocity (nullptr for steady
 // states, where it vanishes).
@@ -69,5 +73,8 @@ BodyForce volume_force(const Mesh& mesh, const std::vector<int>& body_sides, dou
 
 // Drag / lift coefficient of a force component: F / (0.5 U_ref^2 L_ref).
 double force_coefficient(double force, double reference_velocity, double reference_length);
+
+// Pitching moment coefficient of a moment component: M / (0.5 U_ref^2 L_ref^2).
+double moment_coefficient(double moment, double reference_velocity, double reference_length);
 
 } // namespace hydrama::post

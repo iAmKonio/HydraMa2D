@@ -70,7 +70,8 @@ Gradient side_gradient(const Mesh& mesh, int e, int n1, int n2, const std::vecto
 } // namespace
 
 BodyForce surface_force(const Mesh& mesh, const std::vector<int>& body_sides, double nu,
-                        const std::vector<double>& u, const std::vector<double>& v, const std::vector<double>& p) {
+                        const std::vector<double>& u, const std::vector<double>& v, const std::vector<double>& p,
+                        double x_ref, double y_ref) {
     check_inputs(mesh, body_sides, u, v, p, "surface_force");
     BodyForce f;
     for (int ib : body_sides) {
@@ -95,10 +96,18 @@ BodyForce surface_force(const Mesh& mesh, const std::vector<int>& body_sides, do
         const Gradient g = side_gradient(mesh, s.elem, s.node1, s.node2, u, v);
         const double sxy = g.uy + g.vx;
         const double px = -pm * nx * length, py = -pm * ny * length;
+        const double xm = 0.5 * (mesh.x[i1] + mesh.x[i2]);
+        const double ym = 0.5 * (mesh.y[i1] + mesh.y[i2]);
+        const double fx_total = px + nu * length * (2.0 * g.ux * nx + sxy * ny);
+        const double fy_total = py + nu * length * (sxy * nx + 2.0 * g.vy * ny);
+
         f.pressure_fx += px;
         f.pressure_fy += py;
-        f.fx += px + nu * length * (2.0 * g.ux * nx + sxy * ny);
-        f.fy += py + nu * length * (sxy * nx + 2.0 * g.vy * ny);
+        f.pressure_mz += (xm - x_ref) * py - (ym - y_ref) * px;
+
+        f.fx += fx_total;
+        f.fy += fy_total;
+        f.mz += (xm - x_ref) * fy_total - (ym - y_ref) * fx_total;
     }
     return f;
 }
@@ -178,6 +187,12 @@ double force_coefficient(double force, double reference_velocity, double referen
     if (!(reference_velocity > 0.0) || !(reference_length > 0.0))
         throw std::invalid_argument("force_coefficient: the reference velocity and length must be > 0");
     return force / (0.5 * reference_velocity * reference_velocity * reference_length);
+}
+
+double moment_coefficient(double moment, double reference_velocity, double reference_length) {
+    if (!(reference_velocity > 0.0) || !(reference_length > 0.0))
+        throw std::invalid_argument("moment_coefficient: the reference velocity and length must be > 0");
+    return moment / (0.5 * reference_velocity * reference_velocity * reference_length * reference_length);
 }
 
 } // namespace hydrama::post

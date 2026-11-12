@@ -35,8 +35,14 @@ bool Solver::initialize() {
     if (!IO::read_control(prefix + "system/" + config_.casename + ".control", config_.control)) {
         return false;
     }
+    if (config_.override_ntime.has_value()) {
+        config_.control.ntime = *config_.override_ntime;
+    }
     if (!IO::read_physical(prefix + "system/" + config_.casename + ".physical", config_.physical)) {
         return false;
+    }
+    if (config_.override_re.has_value()) {
+        config_.physical.re = *config_.override_re;
     }
     if (!IO::read_solver(prefix + "system/" + config_.casename + ".solver", config_.solver)) {
         return false;
@@ -51,6 +57,17 @@ bool Solver::initialize() {
     if (wall_specs_.empty()) {
         if (!IO::read_walls(prefix + "system/" + config_.casename + ".walls", wall_specs_)) {
             return false;
+        }
+    }
+
+    // Optional inflow boundary velocity configuration (missing file: default uniform u=1, v=0)
+    if (inflow_config_.empty()) {
+        if (!config_.inflow.empty()) {
+            inflow_config_ = config_.inflow;
+        } else {
+            if (!IO::read_inflow(prefix + "system/" + config_.casename + ".inflow", inflow_config_)) {
+                return false;
+            }
         }
     }
     if (!turbulence_) {
@@ -502,7 +519,7 @@ void Solver::run() {
         }
 
         apply_symmetry_bc(mesh_, u_, v_);
-        apply_velocity_bcs(mesh_, u_, v_, wall_specs_);
+        apply_velocity_bcs(mesh_, u_, v_, wall_specs_, inflow_config_);
 
         // ==========================================
         // Step 2: Pressure Calculation (Poisson Eq)
@@ -528,7 +545,7 @@ void Solver::run() {
         }
 
         apply_symmetry_bc(mesh_, u_, v_);
-        apply_velocity_bcs(mesh_, u_, v_, wall_specs_);
+        apply_velocity_bcs(mesh_, u_, v_, wall_specs_, inflow_config_);
 
         // ==========================================
         // Turbulence: advance with u^{n+1}, update nu_t

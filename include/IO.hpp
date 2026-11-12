@@ -54,6 +54,10 @@ public:
     static bool read_walls(const std::string& filepath, std::map<int, MovingWallSpec>& wall_specs);
     static bool read_walls_config(const std::string& filepath, std::map<int, MovingWallSpec>& wall_specs, std::string& error);
 
+    // Optional system/<case>.inflow: missing file leaves inflow empty (default uniform u=1, v=0) and returns true.
+    static bool read_inflow(const std::string& filepath, InflowConfig& inflow);
+    static bool read_inflow_config(const std::string& filepath, InflowConfig& inflow, std::string& error);
+
     static bool read_mesh(const std::string& filepath, Mesh& mesh);
     static bool read_boundary_flags(const std::string& filepath, Mesh& mesh);
 

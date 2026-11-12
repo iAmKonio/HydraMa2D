@@ -31,5 +31,9 @@ fort.*
 **/results/*.vtk
 **/results/*.var
 **/results/*.turb.var
+**/results/*.thermal.var
 **/results/*.monitors.dat
+**/polar_out/
+polar.csv
+polar.png
 !**/results/.gitkeep

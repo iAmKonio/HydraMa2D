@@ -64,7 +64,8 @@ void apply_symmetry_bc(const Mesh& mesh,
 void apply_velocity_bcs(const Mesh& mesh,
                         std::vector<double>& u,
                         std::vector<double>& v,
-                        const std::map<int, MovingWallSpec>& wall_specs) {
+                        const std::map<int, MovingWallSpec>& wall_specs,
+                        const InflowConfig& inflow) {
     // 1. Backward Facing Step (Flag 507) - Parabolic / polynomial inflow profile
     for (int ib = 0; ib < mesh.nboun; ++ib) {
         if (mesh.iside[ib].flag == 507) {
@@ -85,14 +86,16 @@ void apply_velocity_bcs(const Mesh& mesh,
         }
     }
 
-    // 2. Prescribed inflow velocity (Flag 503)
+    // 2. Prescribed inflow velocity (Flag 503 or configured in inflow)
     for (int ib = 0; ib < mesh.nboun; ++ib) {
-        if (mesh.iside[ib].flag == 503) {
+        int flag = mesh.iside[ib].flag;
+        if (flag == flags::kInlet || inflow.has_boundary(flag)) {
+            const InflowSpec spec = inflow.get_spec(flag);
             int nodes[2] = {mesh.iside[ib].node1, mesh.iside[ib].node2};
             for (int i = 0; i < 2; ++i) {
                 int ip = nodes[i];
-                u[ip] = 1.0;
-                v[ip] = 0.0;
+                u[ip] = spec.u;
+                v[ip] = spec.v;
             }
         }
     }

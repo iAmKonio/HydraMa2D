@@ -105,7 +105,33 @@ int main(int argc, char* argv[]) {
         input_arg = argv[1];
     }
 
+    std::optional<double> cli_alpha;
+    std::optional<double> cli_speed;
+    std::optional<double> cli_u;
+    std::optional<double> cli_v;
+    std::optional<int> cli_max_steps;
+    std::optional<double> cli_re;
+
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if ((arg == "--alpha" || arg == "-a" || arg == "--aoa") && i + 1 < argc) {
+            cli_alpha = std::stod(argv[++i]);
+        } else if ((arg == "--speed" || arg == "-s") && i + 1 < argc) {
+            cli_speed = std::stod(argv[++i]);
+        } else if (arg == "--u" && i + 1 < argc) {
+            cli_u = std::stod(argv[++i]);
+        } else if (arg == "--v" && i + 1 < argc) {
+            cli_v = std::stod(argv[++i]);
+        } else if ((arg == "--max-steps" || arg == "--steps" || arg == "-n") && i + 1 < argc) {
+            cli_max_steps = std::stoi(argv[++i]);
+        } else if (arg == "--re" && i + 1 < argc) {
+            cli_re = std::stod(argv[++i]);
+        }
+    }
+
     hydrama::SimulationConfig config;
+    config.override_ntime = cli_max_steps;
+    config.override_re = cli_re;
 
     // Detect case directory and problem name
     const CaseLocation location = locate_case(input_arg);
@@ -119,6 +145,12 @@ int main(int argc, char* argv[]) {
     }
 
     hydrama::Solver solver(config);
+    if (cli_u.has_value() || cli_v.has_value()) {
+        solver.set_inflow_velocity(cli_u.value_or(1.0), cli_v.value_or(0.0));
+    } else if (cli_alpha.has_value()) {
+        solver.set_angle_of_attack(*cli_alpha, cli_speed.value_or(1.0));
+    }
+
     if (!solver.initialize()) {
         std::cerr << "ERROR: Failed to initialize simulation.\n";
         return 1;

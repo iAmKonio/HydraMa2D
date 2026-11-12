@@ -1,0 +1,45 @@
+---
+Restart from prior run (0 - NO, 1 - YES)
+0
+---
+Number of Timesteps (Max in case of steady state)
+500
+---
+Transient (0 - OFF, 1 - ON)
+0
+---
+Simulated Time Interval for Output (transient only)
+1.0
+---
+End Simulation Time (transient only)
+100.0
+---
+Output Controls - Every N iterations
+500
+---
+Output Controls - Every N CPU seconds
+3600
+---
+Global Minimum Calculated Timestep = -1 OR Local Time Steping = 0 OR Specified Time Step Value = 1
+0
+---
+Specified Time Step Value
+1.0e-4
+---
+Convergence Check Interval
+20
+---
+Safety Factor for Calculated Local Time Step
+0.6
+---
+Theta1 (0.5<=theta1<=1.0). Theta2 Hardcoded as 1.0 for Semi-Implicit
+1.0
+---
+Steady State Velocity Convergence (0 - OFF, 1 - ON)
+1
+---
+L2-Norm
+1.0e-5
+---
+Run Time Adjustable Option
+0
