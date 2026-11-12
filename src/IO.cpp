@@ -143,6 +143,42 @@ bool read_control_options(const std::vector<std::string>& lines, size_t first, c
                 std::cerr << "WARNING: *.control: unknown vtk_format '" << val
                           << "' in " << filepath << " (expected ascii_vtk | binary_vtu | compressed_vtu)\n";
             }
+        } else if (key == "dual_time" || key == "dual_time_stepping") {
+            if (val == "true" || val == "1" || val == "on" || val == "yes" || val == "bdf2") {
+                config.dual_time = true;
+            } else if (val == "false" || val == "0" || val == "off" || val == "no") {
+                config.dual_time = false;
+            }
+        } else if (key == "time_integration" || key == "time_stepping") {
+            if (val == "bdf2" || val == "dual_time" || val == "dual_time_stepping") {
+                config.dual_time = true;
+            } else if (val == "euler" || val == "explicit") {
+                config.dual_time = false;
+            }
+        } else if (key == "dual_time_max_subiter" || key == "max_subiterations" || key == "dual_time_subiter") {
+            try {
+                config.dual_time_max_subiter = std::stoi(val);
+            } catch (...) {
+                std::cerr << "WARNING: *.control: invalid dual_time_max_subiter '" << val << "' in " << filepath << "\n";
+            }
+        } else if (key == "dual_time_tolerance" || key == "dual_time_tol" || key == "subiter_tolerance") {
+            try {
+                config.dual_time_tolerance = std::stod(val);
+            } catch (...) {
+                std::cerr << "WARNING: *.control: invalid dual_time_tolerance '" << val << "' in " << filepath << "\n";
+            }
+        } else if (key == "physical_dt" || key == "dt_physical" || key == "dt_phys") {
+            try {
+                config.physical_dt = std::stod(val);
+            } catch (...) {
+                std::cerr << "WARNING: *.control: invalid physical_dt '" << val << "' in " << filepath << "\n";
+            }
+        } else if (key == "csafm_tau" || key == "pseudo_cfl") {
+            try {
+                config.csafm_tau = std::stod(val);
+            } catch (...) {
+                std::cerr << "WARNING: *.control: invalid csafm_tau '" << val << "' in " << filepath << "\n";
+            }
         }
     }
     return true;
