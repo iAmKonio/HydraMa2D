@@ -520,7 +520,6 @@ void Solver::output_results(int iitime, double time_val) {
         time_str = std::to_string(static_cast<int>(time_val));
     }
 
-    std::string vtk_path = prefix + "results/" + config_.casename + "_" + time_str + ".vtk";
     std::string restart_path = prefix + "results/" + config_.casename + ".var";
 
     std::vector<NamedField> scalars;
@@ -538,10 +537,21 @@ void Solver::output_results(int iitime, double time_val) {
         }
     }
 
-    if (scalars.empty()) {
-        IO::write_vtk(vtk_path, mesh_, u_, v_, p_);
+    if (config_.control.vtk_format == VtkFormat::AsciiVtk) {
+        std::string vtk_path = prefix + "results/" + config_.casename + "_" + time_str + ".vtk";
+        if (scalars.empty()) {
+            IO::write_vtk(vtk_path, mesh_, u_, v_, p_);
+        } else {
+            IO::write_vtk(vtk_path, mesh_, u_, v_, p_, scalars);
+        }
     } else {
-        IO::write_vtk(vtk_path, mesh_, u_, v_, p_, scalars);
+        std::string vtu_path = prefix + "results/" + config_.casename + "_" + time_str + ".vtu";
+        const bool compress = (config_.control.vtk_format == VtkFormat::CompressedVtu);
+        if (scalars.empty()) {
+            IO::write_vtu(vtu_path, mesh_, u_, v_, p_, compress);
+        } else {
+            IO::write_vtu(vtu_path, mesh_, u_, v_, p_, scalars, compress);
+        }
     }
     IO::write_restart(restart_path, time_val, iitime, config_.control.transient_on, u_, v_, p_);
 

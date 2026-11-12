@@ -76,6 +76,24 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# Optional ZLIB compression for VTU output
+# ---------------------------------------------------------------------------
+option(HYDRAMA2D_ENABLE_ZLIB "Enable ZLIB compression for binary VTU output" ON)
+
+set(HYDRAMA2D_HAVE_ZLIB OFF)
+if(HYDRAMA2D_ENABLE_ZLIB)
+    find_package(ZLIB QUIET)
+    if(ZLIB_FOUND)
+        set(HYDRAMA2D_HAVE_ZLIB ON)
+        message(STATUS "HydraMa2D ZLIB compression: enabled (ZLIB ${ZLIB_VERSION_STRING})")
+    else()
+        message(STATUS "HydraMa2D ZLIB compression: disabled (ZLIB not found)")
+    endif()
+else()
+    message(STATUS "HydraMa2D ZLIB compression: disabled (HYDRAMA2D_ENABLE_ZLIB=OFF)")
+endif()
+
+# ---------------------------------------------------------------------------
 # Core solver library: everything except the program entry point, so that the
 # executable and the unit tests link against the same compiled code.
 # ---------------------------------------------------------------------------
@@ -159,6 +177,10 @@ endif()
 if(HYDRAMA2D_HAVE_OPENMP)
     target_link_libraries(hydrama2d_core PUBLIC OpenMP::OpenMP_CXX)
     target_compile_definitions(hydrama2d_core PUBLIC HYDRAMA2D_HAVE_OPENMP=1)
+endif()
+if(HYDRAMA2D_HAVE_ZLIB)
+    target_link_libraries(hydrama2d_core PUBLIC ZLIB::ZLIB)
+    target_compile_definitions(hydrama2d_core PUBLIC HYDRAMA2D_HAVE_ZLIB=1)
 endif()
 
 # ---------------------------------------------------------------------------

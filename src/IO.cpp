@@ -23,6 +23,10 @@
 #include <cstring>
 #include <filesystem>
 #include <set>
+#include <cstdint>
+#if defined(HYDRAMA2D_HAVE_ZLIB)
+#include <zlib.h>
+#endif
 
 namespace hydrama {
 
@@ -50,47 +54,6 @@ static std::vector<std::string> read_non_empty_lines(const std::string& filepath
         }
     }
     return lines;
-}
-
-bool IO::read_control(const std::string& filepath, ControlConfig& config) {
-    auto lines = read_non_empty_lines(filepath);
-    if (lines.size() < 45) {
-        std::cerr << "ERROR: *.control FILE DOES NOT EXIST OR HAS INVALID FORMAT: " << filepath << "\n";
-        return false;
-    }
-
-    config.restart_opt          = std::stoi(lines[2]);
-    config.ntime                = std::stoi(lines[5]);
-    config.transient_on         = std::stoi(lines[8]);
-    config.time_output_interval = parse_fortran_double(lines[11]);
-    config.end_rtime            = parse_fortran_double(lines[14]);
-    config.write_output         = std::stoi(lines[17]);
-    config.write_time_output    = parse_fortran_double(lines[20]);
-    config.dtfixed              = std::stoi(lines[23]);
-    config.dtfix                = parse_fortran_double(lines[26]);
-    config.iwrite               = std::stoi(lines[29]);
-    config.csafm                = parse_fortran_double(lines[32]);
-    config.theta[0]             = parse_fortran_double(lines[35]);
-    config.theta[1]             = 1.0;
-    config.vel_check            = std::stoi(lines[38]);
-    config.l2norm_vel_tolerance = parse_fortran_double(lines[41]);
-    config.runtime_mod          = std::stoi(lines[44]);
-
-    return true;
-}
-
-bool IO::read_physical(const std::string& filepath, PhysicalConfig& config) {
-    auto lines = read_non_empty_lines(filepath);
-    if (lines.size() < 6) {
-        std::cerr << "ERROR: *.physical FILE DOES NOT EXIST OR HAS INVALID FORMAT: " << filepath << "\n";
-        return false;
-    }
-
-    config.re = parse_fortran_double(lines[2]);
-    int pnode_1based = std::stoi(lines[5]);
-    config.pnode = pnode_1based - 1;
-
-    return true;
 }
 
 namespace {
@@ -145,6 +108,94 @@ bool option_error(const std::string& filepath, const std::string& message) {
     std::cerr << "ERROR: *.solver OPTION " << message << " (" << filepath << ")\n";
     return false;
 }
+
+bool read_control_options(const std::vector<std::string>& lines, size_t first, const std::string& filepath,
+                          ControlConfig& config) {
+    for (size_t n = first; n < lines.size(); ++n) {
+        std::string line = lines[n];
+        const size_t comment = line.find_first_of("#!");
+        if (comment != std::string::npos) line.erase(comment);
+        line = trim(line);
+        if (line.empty()) continue;
+
+        std::string key, val;
+        const size_t eq = line.find_first_of("=:");
+        if (eq != std::string::npos) {
+            key = to_lower(trim(line.substr(0, eq)));
+            val = to_lower(trim(line.substr(eq + 1)));
+        } else {
+            std::istringstream iss(line);
+            iss >> key >> val;
+            key = to_lower(trim(key));
+            val = to_lower(trim(val));
+        }
+
+        if (key.empty()) continue;
+
+        if (key == "vtk_format") {
+            if (val == "ascii" || val == "ascii_vtk" || val == "vtk") {
+                config.vtk_format = VtkFormat::AsciiVtk;
+            } else if (val == "binary_vtu" || val == "vtu" || val == "binary") {
+                config.vtk_format = VtkFormat::BinaryVtu;
+            } else if (val == "compressed_vtu" || val == "compressed" || val == "zlib_vtu" || val == "zlib") {
+                config.vtk_format = VtkFormat::CompressedVtu;
+            } else {
+                std::cerr << "WARNING: *.control: unknown vtk_format '" << val
+                          << "' in " << filepath << " (expected ascii_vtk | binary_vtu | compressed_vtu)\n";
+            }
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+bool IO::read_control(const std::string& filepath, ControlConfig& config) {
+    auto lines = read_non_empty_lines(filepath);
+    if (lines.size() < 45) {
+        std::cerr << "ERROR: *.control FILE DOES NOT EXIST OR HAS INVALID FORMAT: " << filepath << "\n";
+        return false;
+    }
+
+    config.restart_opt          = std::stoi(lines[2]);
+    config.ntime                = std::stoi(lines[5]);
+    config.transient_on         = std::stoi(lines[8]);
+    config.time_output_interval = parse_fortran_double(lines[11]);
+    config.end_rtime            = parse_fortran_double(lines[14]);
+    config.write_output         = std::stoi(lines[17]);
+    config.write_time_output    = parse_fortran_double(lines[20]);
+    config.dtfixed              = std::stoi(lines[23]);
+    config.dtfix                = parse_fortran_double(lines[26]);
+    config.iwrite               = std::stoi(lines[29]);
+    config.csafm                = parse_fortran_double(lines[32]);
+    config.theta[0]             = parse_fortran_double(lines[35]);
+    config.theta[1]             = 1.0;
+    config.vel_check            = std::stoi(lines[38]);
+    config.l2norm_vel_tolerance = parse_fortran_double(lines[41]);
+    config.runtime_mod          = std::stoi(lines[44]);
+
+    if (lines.size() > 45) {
+        read_control_options(lines, 45, filepath, config);
+    }
+
+    return true;
+}
+
+bool IO::read_physical(const std::string& filepath, PhysicalConfig& config) {
+    auto lines = read_non_empty_lines(filepath);
+    if (lines.size() < 6) {
+        std::cerr << "ERROR: *.physical FILE DOES NOT EXIST OR HAS INVALID FORMAT: " << filepath << "\n";
+        return false;
+    }
+
+    config.re = parse_fortran_double(lines[2]);
+    int pnode_1based = std::stoi(lines[5]);
+    config.pnode = pnode_1based - 1;
+
+    return true;
+}
+
+namespace {
 
 // Optional "key = value" settings following the positional block of *.solver.
 bool read_solver_options(const std::vector<std::string>& lines, size_t first, const std::string& filepath,
@@ -1159,6 +1210,250 @@ bool IO::write_vtk(const std::string& filepath,
     }
 
     return true;
+}
+
+bool IO::write_vtu(const std::string& filepath,
+                   const Mesh& mesh,
+                   const std::vector<double>& u,
+                   const std::vector<double>& v,
+                   const std::vector<double>& p,
+                   bool compress) {
+    return write_vtu(filepath, mesh, u, v, p, {}, compress);
+}
+
+bool IO::write_vtu(const std::string& filepath,
+                   const Mesh& mesh,
+                   const std::vector<double>& u,
+                   const std::vector<double>& v,
+                   const std::vector<double>& p,
+                   const std::vector<NamedField>& point_scalars,
+                   bool compress) {
+    const uint16_t endian_check = 0x0001;
+    if (*reinterpret_cast<const uint8_t*>(&endian_check) != 0x01) {
+        std::cerr << "ERROR: HydraMa2D binary VTU writer requires little-endian architecture\n";
+        return false;
+    }
+
+    if (static_cast<int>(u.size()) != mesh.npoin ||
+        static_cast<int>(v.size()) != mesh.npoin ||
+        static_cast<int>(p.size()) != mesh.npoin) {
+        std::cerr << "ERROR: INVALID FIELD SIZE FOR VTU WRITE\n";
+        return false;
+    }
+    for (const NamedField& f : point_scalars) {
+        if (!f.values || static_cast<int>(f.values->size()) != mesh.npoin || f.name.empty() ||
+            f.name.find_first_of(" \t\r\n\"'<>") != std::string::npos) {
+            std::cerr << "ERROR: INVALID VTU POINT FIELD '" << f.name << "'\n";
+            return false;
+        }
+    }
+
+#if !defined(HYDRAMA2D_HAVE_ZLIB)
+    if (compress) {
+        std::cerr << "WARNING: HydraMa2D was compiled without ZLIB; writing uncompressed VTU instead\n";
+        compress = false;
+    }
+#endif
+
+    std::ofstream out(filepath, std::ios::binary);
+    if (!out.is_open()) {
+        std::cerr << "ERROR: CANNOT OPEN VTU FILE FOR WRITING: " << filepath << "\n";
+        return false;
+    }
+
+    // 1. Points: 3 doubles per node (x, y, 0.0) -> Float64
+    std::vector<double> points_data(static_cast<size_t>(mesh.npoin) * 3);
+    for (int i = 0; i < mesh.npoin; ++i) {
+        points_data[3 * i + 0] = mesh.x[i];
+        points_data[3 * i + 1] = mesh.y[i];
+        points_data[3 * i + 2] = 0.0;
+    }
+
+    // 2. Connectivity: triangles then quads -> Int64
+    const int ntri = mesh.num_triangles();
+    const int nquad = mesh.num_quads();
+    std::vector<int64_t> conn_data;
+    conn_data.reserve(static_cast<size_t>(ntri) * 3 + static_cast<size_t>(nquad) * 4);
+    for (int i = 0; i < ntri; ++i) {
+        conn_data.push_back(mesh.intma[i][0]);
+        conn_data.push_back(mesh.intma[i][1]);
+        conn_data.push_back(mesh.intma[i][2]);
+    }
+    for (const auto& q : mesh.quads) {
+        conn_data.push_back(q[0]);
+        conn_data.push_back(q[1]);
+        conn_data.push_back(q[2]);
+        conn_data.push_back(q[3]);
+    }
+
+    // 3. Offsets: cumulative node count per cell -> Int64
+    std::vector<int64_t> offsets_data(mesh.nelem);
+    int64_t cur_offset = 0;
+    int cell_idx = 0;
+    for (int i = 0; i < ntri; ++i) {
+        cur_offset += 3;
+        offsets_data[cell_idx++] = cur_offset;
+    }
+    for (int i = 0; i < nquad; ++i) {
+        cur_offset += 4;
+        offsets_data[cell_idx++] = cur_offset;
+    }
+
+    // 4. Types: 5 (VTK_TRIANGLE) or 9 (VTK_QUAD) -> UInt8
+    std::vector<uint8_t> types_data(mesh.nelem);
+    for (int i = 0; i < ntri; ++i) {
+        types_data[i] = 5;
+    }
+    for (int i = 0; i < nquad; ++i) {
+        types_data[ntri + i] = 9;
+    }
+
+    // 5. Velocity: 3 floats per node (u, v, 0.0f) -> Float32
+    std::vector<float> vel_data(static_cast<size_t>(mesh.npoin) * 3);
+    for (int i = 0; i < mesh.npoin; ++i) {
+        vel_data[3 * i + 0] = static_cast<float>(u[i]);
+        vel_data[3 * i + 1] = static_cast<float>(v[i]);
+        vel_data[3 * i + 2] = 0.0f;
+    }
+
+    // 6. Pressure: 1 float per node -> Float32
+    std::vector<float> p_data(mesh.npoin);
+    for (int i = 0; i < mesh.npoin; ++i) {
+        p_data[i] = static_cast<float>(p[i]);
+    }
+
+    // 7. Additional point scalars -> Float32
+    std::vector<std::vector<float>> scalar_data(point_scalars.size());
+    for (size_t k = 0; k < point_scalars.size(); ++k) {
+        scalar_data[k].resize(mesh.npoin);
+        const auto& vals = *point_scalars[k].values;
+        for (int i = 0; i < mesh.npoin; ++i) {
+            scalar_data[k][i] = static_cast<float>(vals[i]);
+        }
+    }
+
+    struct VtuBlock {
+        std::vector<uint64_t> header;
+        const void* payload_ptr = nullptr;
+        size_t payload_size = 0;
+        std::vector<uint8_t> compressed_storage;
+        uint64_t offset = 0;
+    };
+
+    uint64_t current_offset = 0;
+    auto make_block = [&](const void* raw_ptr, size_t raw_bytes) -> VtuBlock {
+        VtuBlock b;
+        b.offset = current_offset;
+        if (!compress) {
+            b.header = { static_cast<uint64_t>(raw_bytes) };
+            b.payload_ptr = raw_ptr;
+            b.payload_size = raw_bytes;
+            current_offset += sizeof(uint64_t) + raw_bytes;
+        } else {
+#if defined(HYDRAMA2D_HAVE_ZLIB)
+            uLong ucomp_size = static_cast<uLong>(raw_bytes);
+            uLong bound = compressBound(ucomp_size);
+            b.compressed_storage.resize(bound);
+            uLong comp_size = bound;
+            int ret = ::compress(b.compressed_storage.data(), &comp_size,
+                                 reinterpret_cast<const Bytef*>(raw_ptr), ucomp_size);
+            if (ret != Z_OK) {
+                b.compressed_storage.clear();
+                b.header = { static_cast<uint64_t>(raw_bytes) };
+                b.payload_ptr = raw_ptr;
+                b.payload_size = raw_bytes;
+                current_offset += sizeof(uint64_t) + raw_bytes;
+                return b;
+            }
+            b.compressed_storage.resize(comp_size);
+            b.header = {
+                1ULL,
+                static_cast<uint64_t>(raw_bytes),
+                static_cast<uint64_t>(raw_bytes),
+                static_cast<uint64_t>(comp_size)
+            };
+            b.payload_ptr = b.compressed_storage.data();
+            b.payload_size = comp_size;
+            current_offset += 4 * sizeof(uint64_t) + comp_size;
+#endif
+        }
+        return b;
+    };
+
+    VtuBlock b_points  = make_block(points_data.data(), points_data.size() * sizeof(double));
+    VtuBlock b_conn    = make_block(conn_data.data(), conn_data.size() * sizeof(int64_t));
+    VtuBlock b_offsets = make_block(offsets_data.data(), offsets_data.size() * sizeof(int64_t));
+    VtuBlock b_types   = make_block(types_data.data(), types_data.size() * sizeof(uint8_t));
+    VtuBlock b_vel     = make_block(vel_data.data(), vel_data.size() * sizeof(float));
+    VtuBlock b_p       = make_block(p_data.data(), p_data.size() * sizeof(float));
+
+    std::vector<VtuBlock> b_scalars;
+    b_scalars.reserve(point_scalars.size());
+    for (size_t k = 0; k < point_scalars.size(); ++k) {
+        b_scalars.push_back(make_block(scalar_data[k].data(), scalar_data[k].size() * sizeof(float)));
+    }
+
+    out << "<?xml version=\"1.0\"?>\n";
+    out << "<VTKFile type=\"UnstructuredGrid\" version=\"1.0\" byte_order=\"LittleEndian\" header_type=\"UInt64\"";
+    if (compress) {
+        out << " compressor=\"vtkZLibDataCompressor\"";
+    }
+    out << ">\n";
+    out << "  <UnstructuredGrid>\n";
+    out << "    <Piece NumberOfPoints=\"" << mesh.npoin << "\" NumberOfCells=\"" << mesh.nelem << "\">\n";
+
+    out << "      <Points>\n";
+    out << "        <DataArray type=\"Float64\" Name=\"Points\" NumberOfComponents=\"3\" format=\"appended\" offset=\""
+        << b_points.offset << "\" />\n";
+    out << "      </Points>\n";
+
+    out << "      <Cells>\n";
+    out << "        <DataArray type=\"Int64\" Name=\"connectivity\" format=\"appended\" offset=\""
+        << b_conn.offset << "\" />\n";
+    out << "        <DataArray type=\"Int64\" Name=\"offsets\" format=\"appended\" offset=\""
+        << b_offsets.offset << "\" />\n";
+    out << "        <DataArray type=\"UInt8\" Name=\"types\" format=\"appended\" offset=\""
+        << b_types.offset << "\" />\n";
+    out << "      </Cells>\n";
+
+    out << "      <PointData Vectors=\"velocity\" Scalars=\"P\">\n";
+    out << "        <DataArray type=\"Float32\" Name=\"velocity\" NumberOfComponents=\"3\" format=\"appended\" offset=\""
+        << b_vel.offset << "\" />\n";
+    out << "        <DataArray type=\"Float32\" Name=\"P\" NumberOfComponents=\"1\" format=\"appended\" offset=\""
+        << b_p.offset << "\" />\n";
+    for (size_t k = 0; k < point_scalars.size(); ++k) {
+        out << "        <DataArray type=\"Float32\" Name=\"" << point_scalars[k].name
+            << "\" NumberOfComponents=\"1\" format=\"appended\" offset=\""
+            << b_scalars[k].offset << "\" />\n";
+    }
+    out << "      </PointData>\n";
+
+    out << "    </Piece>\n";
+    out << "  </UnstructuredGrid>\n";
+
+    out << "  <AppendedData encoding=\"raw\">\n    _";
+
+    auto write_block = [&](const VtuBlock& b) {
+        out.write(reinterpret_cast<const char*>(b.header.data()),
+                  static_cast<std::streamsize>(b.header.size() * sizeof(uint64_t)));
+        out.write(reinterpret_cast<const char*>(b.payload_ptr),
+                  static_cast<std::streamsize>(b.payload_size));
+    };
+
+    write_block(b_points);
+    write_block(b_conn);
+    write_block(b_offsets);
+    write_block(b_types);
+    write_block(b_vel);
+    write_block(b_p);
+    for (const auto& b : b_scalars) {
+        write_block(b);
+    }
+
+    out << "\n  </AppendedData>\n";
+    out << "</VTKFile>\n";
+
+    return out.good();
 }
 
 namespace {

@@ -9,6 +9,12 @@
 
 namespace hydrama {
 
+enum class VtkFormat {
+    AsciiVtk,      // Legacy ASCII .vtk (default)
+    BinaryVtu,     // Uncompressed raw binary appended XML .vtu
+    CompressedVtu  // Zlib-compressed raw binary appended XML .vtu
+};
+
 struct ControlConfig {
     int restart_opt = 0;
     int ntime = 1000;
@@ -25,6 +31,7 @@ struct ControlConfig {
     int vel_check = 1;
     double l2norm_vel_tolerance = 1.0e-6;
     int runtime_mod = 0;
+    VtkFormat vtk_format = VtkFormat::AsciiVtk;
 };
 
 struct PhysicalConfig {
