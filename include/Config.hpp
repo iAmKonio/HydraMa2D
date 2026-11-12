@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BoundaryConditions.hpp"
+#include "PeriodicConfig.hpp"
 #include "thermal/ThermalConfig.hpp"
 #include <string>
 #include <array>
@@ -72,6 +73,7 @@ struct SimulationConfig {
     SolverConfig solver;
     ThermalConfig thermal;
     InflowConfig inflow;
+    PeriodicConfig periodic;
     std::optional<int> override_ntime;
     std::optional<double> override_re;
 };

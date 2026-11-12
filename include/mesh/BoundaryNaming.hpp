@@ -42,14 +42,14 @@ enum class BoundaryType : unsigned char {
     WallCold,         // 502
     Inlet,            // 503
     Outlet,           // 504
+    Periodic,         // 505
     Symmetry,         // 506
     InletProfile,     // 507
     InletParabolic,   // 508
+    MovingWall,       // 509
+    Rotating,         // 510
     // Recognised, but not implemented by the solver: a mesh that uses them is
     // rejected (instead of silently treating the boundary as something else).
-    Periodic,
-    Rotating,
-    MovingWall,
     Farfield,
     PressureInlet,
     MassFlowInlet,

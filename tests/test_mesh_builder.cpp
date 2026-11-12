@@ -429,23 +429,23 @@ TEST_CASE("build_mesh: *.bofl entries take precedence over names", "[mesh_import
 
 TEST_CASE("build_mesh: unknown *.bofl codes are kept with a warning (legacy behaviour)", "[mesh_import][bofl]") {
     BuildOptions o;
-    o.flag_overrides = {{3, 505}};
+    o.flag_overrides = {{3, 511}};
     ImportReport r;
     const Mesh m = build(square(), o, &r);
-    CHECK(m.iside[2].flag == 505);
+    CHECK(m.iside[2].flag == 511);
     CHECK(r.patches[2].type == BoundaryType::Custom);
     REQUIRE(r.warnings.size() == 1);
-    CHECK_THAT(r.warnings[0], ContainsSubstring("flag code 505"));
+    CHECK_THAT(r.warnings[0], ContainsSubstring("flag code 511"));
 }
 
 TEST_CASE("build_mesh: recognised but unimplemented boundary types are rejected", "[mesh_import]") {
     MeshData d = square();
-    d.physical_names[{1, 1}] = "periodic_bottom";
-    d.physical_names[{1, 3}] = "periodic_top";
+    d.physical_names[{1, 1}] = "pressure_inlet_bottom";
+    d.physical_names[{1, 3}] = "mass_flow_inlet_top";
     d.physical_names[{1, 2}] = "farfield";
     const std::string err = build_error(d);
     CHECK_THAT(err, ContainsSubstring("3 problems"));
-    CHECK_THAT(err, ContainsSubstring("'periodic_bottom' (tag 1) is a 'periodic' boundary"));
+    CHECK_THAT(err, ContainsSubstring("'pressure_inlet_bottom' (tag 1) is a 'pressure_inlet' boundary"));
     CHECK_THAT(err, ContainsSubstring("'farfield' (tag 2) is a 'farfield' boundary"));
     CHECK_THAT(err, ContainsSubstring("does not implement yet"));
 
@@ -456,7 +456,7 @@ TEST_CASE("build_mesh: recognised but unimplemented boundary types are rejected"
     CHECK(m.iside[0].flag == 0);
     CHECK(m.iside[1].flag == 0);
     CHECK(m.iside[3].flag == 503);
-    CHECK(r.patches[0].type == BoundaryType::Periodic);
+    CHECK(r.patches[0].type == BoundaryType::PressureInlet);
     CHECK(r.warnings.size() == 3);
 }
 
@@ -465,14 +465,14 @@ TEST_CASE("build_mesh: boundary name problems are reported once per group", "[me
     d.physical_names[{1, 1}] = "airfoil";
     d.physical_names[{1, 2}] = "inlet_wall";
     d.physical_names.erase({1, 3});
-    d.physical_names[{1, 4}] = "505";
+    d.physical_names[{1, 4}] = "511";
     add_line(d, 1, 2, 1); // bottom twice: still one message
     const std::string err = build_error(d);
     CHECK_THAT(err, ContainsSubstring("square.msh: invalid mesh (4 problems)"));
     CHECK_THAT(err, ContainsSubstring("'airfoil' (tag 1)") && ContainsSubstring("no boundary keyword"));
     CHECK_THAT(err, ContainsSubstring("'inlet_wall' (tag 2)") && ContainsSubstring("ambiguous"));
     CHECK_THAT(err, ContainsSubstring("physical group 3 (unnamed)") && ContainsSubstring("*.bofl"));
-    CHECK_THAT(err, ContainsSubstring("'505' (tag 4)") && ContainsSubstring("not a known flag code"));
+    CHECK_THAT(err, ContainsSubstring("'511' (tag 4)") && ContainsSubstring("not a known flag code"));
 }
 
 TEST_CASE("build_mesh: groups with different conditions on the same side", "[mesh_import][errors]") {

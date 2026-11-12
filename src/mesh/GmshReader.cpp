@@ -122,6 +122,8 @@ public:
                 if (!have_nodes) fail("$Elements before $Nodes");
                 if (version_ == 2) read_elements_v2(); else read_elements_v4();
                 have_elements = true;
+            } else if (name == "Periodic") {
+                if (version_ == 2) read_periodic_v2(); else read_periodic_v4();
             } else {
                 skip_section(name);
             }
@@ -636,6 +638,85 @@ private:
         if (seen != total)
             fail("element blocks contain " + std::to_string(seen) + " elements, the header declares " + std::to_string(total));
         expect_end("Elements");
+    }
+
+    void read_periodic_v2() {
+        skip_space();
+        const std::int64_t count = ascii_count("number of periodic links");
+        if (binary_) finish_text_line();
+        check_count(count, 4, "periodic links");
+        for (std::int64_t k = 0; k < count; ++k) {
+            PeriodicLink link;
+            if (!binary_) {
+                link.dim = ascii_int32("periodic entity dimension");
+                link.entity_tag = ascii_int32("periodic slave entity tag");
+                link.master_tag = ascii_int32("periodic master entity tag");
+                const std::int64_t num_affine = ascii_count("number of affine coefficients");
+                if (num_affine > 0) {
+                    link.affine.resize(static_cast<std::size_t>(num_affine));
+                    for (std::int64_t a = 0; a < num_affine; ++a) {
+                        link.affine[static_cast<std::size_t>(a)] = ascii_double("affine matrix coefficient");
+                    }
+                }
+                const std::int64_t num_nodes = ascii_count("number of periodic nodes");
+                check_count(num_nodes, 4, "periodic nodes");
+                link.node_tags.reserve(static_cast<std::size_t>(num_nodes));
+                for (std::int64_t n = 0; n < num_nodes; ++n) {
+                    const std::int64_t slave = ascii_int("slave node tag");
+                    const std::int64_t master = ascii_int("master node tag");
+                    link.node_tags.emplace_back(slave, master);
+                }
+            } else {
+                link.dim = binary_int("periodic entity dimension");
+                link.entity_tag = binary_int("periodic slave entity tag");
+                link.master_tag = binary_int("periodic master entity tag");
+                const std::int64_t num_affine = binary_int("number of affine coefficients");
+                if (num_affine > 0) {
+                    link.affine.resize(static_cast<std::size_t>(num_affine));
+                    for (std::int64_t a = 0; a < num_affine; ++a) {
+                        link.affine[static_cast<std::size_t>(a)] = binary_double("affine matrix coefficient");
+                    }
+                }
+                const std::int64_t num_nodes = binary_int("number of periodic nodes");
+                check_count(num_nodes, 8, "periodic nodes");
+                link.node_tags.reserve(static_cast<std::size_t>(num_nodes));
+                for (std::int64_t n = 0; n < num_nodes; ++n) {
+                    const std::int64_t slave = binary_int("slave node tag");
+                    const std::int64_t master = binary_int("master node tag");
+                    link.node_tags.emplace_back(slave, master);
+                }
+            }
+            data_.periodic_links.push_back(std::move(link));
+        }
+        expect_end("Periodic");
+    }
+
+    void read_periodic_v4() {
+        const std::int64_t count = v4_size("number of periodic links");
+        check_count(count, 4, "periodic links");
+        for (std::int64_t k = 0; k < count; ++k) {
+            PeriodicLink link;
+            link.dim = v4_int("periodic entity dimension");
+            link.entity_tag = v4_int("periodic slave entity tag");
+            link.master_tag = v4_int("periodic master entity tag");
+            const std::int64_t num_affine = v4_size("number of affine coefficients");
+            if (num_affine > 0) {
+                link.affine.resize(static_cast<std::size_t>(num_affine));
+                for (std::int64_t a = 0; a < num_affine; ++a) {
+                    link.affine[static_cast<std::size_t>(a)] = v4_double("affine matrix coefficient");
+                }
+            }
+            const std::int64_t num_nodes = v4_size("number of periodic nodes");
+            check_count(num_nodes, 8, "periodic nodes");
+            link.node_tags.reserve(static_cast<std::size_t>(num_nodes));
+            for (std::int64_t n = 0; n < num_nodes; ++n) {
+                const std::int64_t slave = v4_size("slave node tag");
+                const std::int64_t master = v4_size("master node tag");
+                link.node_tags.emplace_back(slave, master);
+            }
+            data_.periodic_links.push_back(std::move(link));
+        }
+        expect_end("Periodic");
     }
 
     // MSH 4.1: physical tags come from the entity of each element block.

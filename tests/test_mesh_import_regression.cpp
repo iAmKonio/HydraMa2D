@@ -215,14 +215,14 @@ TEST_CASE("Solver: errors of Gmsh cases stop the initialisation", "[mesh_import]
         CHECK_THAT(run.errors, ContainsSubstring("ENTRY 2 OF 2"));
     }
     SECTION("unimplemented boundary type") {
-        TempDir dir("gmsh-periodic");
+        TempDir dir("gmsh-farfield");
         prepare_case(dir.path(), opts);
         auto names = kBenchmarkNames;
-        names[5] = "periodic_top";
+        names[5] = "farfield_top";
         use_gmsh_mesh(dir.path(), write_gmsh(gmsh_model_from_mesh(legacy_mesh(), names, 1)), false);
         const Run run = run_solver(dir.path());
         CHECK_FALSE(run.initialized);
-        CHECK_THAT(run.errors, ContainsSubstring("'periodic_top' (tag 5) is a 'periodic' boundary"));
+        CHECK_THAT(run.errors, ContainsSubstring("'farfield_top' (tag 5) is a 'farfield' boundary"));
     }
     SECTION("corrupt file") {
         TempDir dir("gmsh-corrupt");

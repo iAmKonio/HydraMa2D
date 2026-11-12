@@ -126,6 +126,7 @@ add_library(hydrama2d_core STATIC
     src/mesh/Su2Reader.cpp
     src/mesh/CgnsReader.cpp
     src/mesh/CgnsTranslate.cpp
+    src/numerics/Periodic.cpp
     src/numerics/PointImplicit.cpp
     src/numerics/Quadrature.cpp
     src/numerics/QuadElement.cpp

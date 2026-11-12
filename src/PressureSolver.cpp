@@ -117,7 +117,28 @@ void PressureSolver::update(const Mesh& mesh,
     }
 
     const linalg::OperatorChange change = linalg::OperatorChange::Values;
-    if (assembled_precond_) {
+    periodic_map_ = PeriodicMapping::build(mesh);
+
+    if (periodic_map_.has_periodic) {
+        std::vector<int> red_dofs;
+        std::vector<double> red_vals;
+        for (std::size_t k = 0; k < constraints_.size(); ++k) {
+            int orig_dof = constraints_.dofs()[k];
+            red_dofs.push_back(periodic_map_.to_indep[orig_dof]);
+            red_vals.push_back(constraints_.values()[k]);
+        }
+        reduced_constraints_ = linalg::DirichletConstraints(red_dofs, red_vals);
+
+        reduced_op_ = std::make_unique<linalg::PeriodicReducedOperator>(*op_, periodic_map_);
+        op_ = reduced_op_.get();
+
+        const linalg::ConstrainedOperator constrained(*op_, reduced_constraints_);
+        if (precond_ready_) {
+            precond_->update(constrained, change);
+        } else {
+            precond_->setup(constrained);
+        }
+    } else if (assembled_precond_) {
         // A = c A_ref: keep the setup, rescale its inverse.
         if (reuse_ && precond_ready_ && reference_valid_) {
             if (const auto c = uniform_scaling(gstif, pdiag, gstif_ref_, pdiag_ref_)) {
@@ -158,6 +179,31 @@ const linalg::LinearOperator& PressureSolver::op() const {
 
 linalg::SolveResult PressureSolver::solve(const std::vector<double>& rhs, std::vector<double>& p) {
     if (!op_) throw std::logic_error("PressureSolver::solve called before update()");
+    if (periodic_map_.has_periodic) {
+        const int n_indep = periodic_map_.num_independent;
+        std::vector<double> rhs_hat(static_cast<std::size_t>(n_indep), 0.0);
+        for (int i = 0; i < periodic_map_.num_nodes; ++i) {
+            rhs_hat[static_cast<std::size_t>(periodic_map_.to_indep[i])] += rhs[static_cast<std::size_t>(i)];
+        }
+        std::vector<double> p_hat(static_cast<std::size_t>(n_indep), 0.0);
+        for (int j = 0; j < n_indep; ++j) {
+            p_hat[static_cast<std::size_t>(j)] = p[static_cast<std::size_t>(periodic_map_.from_indep[static_cast<std::size_t>(j)])];
+        }
+
+        linalg::SolveResult res;
+        if (assembled_precond_) {
+            const linalg::ScaledPreconditioner m(*precond_, scale_);
+            res = krylov_->solve(*op_, m, rhs_hat, p_hat, reduced_constraints_);
+        } else {
+            res = krylov_->solve(*op_, *precond_, rhs_hat, p_hat, reduced_constraints_);
+        }
+
+        for (int i = 0; i < periodic_map_.num_nodes; ++i) {
+            p[static_cast<std::size_t>(i)] = p_hat[static_cast<std::size_t>(periodic_map_.to_indep[i])];
+        }
+        return res;
+    }
+
     if (assembled_precond_) {
         // After a numeric setup scale_ == 1 and the view is transparent.
         const linalg::ScaledPreconditioner m(*precond_, scale_);

@@ -103,6 +103,7 @@ add_executable(hydrama2d_tests
     test_skin_friction.cpp
     test_spectral.cpp
     test_thermal.cpp
+    test_periodic.cpp
     test_inflow_bc.cpp
     test_openmp.cpp
 )

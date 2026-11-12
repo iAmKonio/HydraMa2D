@@ -1,6 +1,8 @@
 #include "Solver.hpp"
 #include "IO.hpp"
+#include "geometry/FieldOps.hpp"
 #include "mesh/MeshQuality.hpp"
+#include "numerics/Periodic.hpp"
 #include "numerics/ScalarTransport.hpp"
 #include "Step1.hpp"
 #include "Step2.hpp"
@@ -70,6 +72,17 @@ bool Solver::initialize() {
             }
         }
     }
+
+    // Optional periodic boundary configuration (missing file: empty)
+    if (!periodic_config_.enabled) {
+        if (config_.periodic.enabled) {
+            periodic_config_ = config_.periodic;
+        } else {
+            if (!IO::read_periodic(prefix + "system/" + config_.casename + ".periodic", periodic_config_)) {
+                return false;
+            }
+        }
+    }
     if (!turbulence_) {
         try {
             turbulence_ = make_turbulence_model(turbulence_config_);
@@ -95,6 +108,7 @@ bool Solver::initialize() {
     mesh_.determine_wall_nodes();
     mesh_.compute_element_sizes();
     mesh_.compute_laplacian_stiffness();
+    initialize_periodic(prefix);
     std::cout << mesh::format_quality_report(mesh_, mesh::assess_mesh_quality(mesh_));
 
     // Parabolic (fully developed) inlets: check that they are open curves.
@@ -165,6 +179,13 @@ bool Solver::initialize() {
     elcoe2_.resize(npoin);
     pdiag_.resize(npoin);
     gstif_.resize(static_cast<std::size_t>(mesh_.num_offdiag_blocks()));
+    nodal_mass_ = lumped_nodal_mass(mesh_);
+
+    if (mesh_.has_periodic()) {
+        apply_periodic_field(mesh_, {}, u_);
+        apply_periodic_field(mesh_, {}, v_);
+        apply_periodic_field(mesh_, {}, p_);
+    }
 
     // Read optional thermal configuration if not already set programmatically
     if (!thermal_config_.enabled) {
@@ -345,6 +366,91 @@ bool Solver::initialize_thermal(const std::string& prefix, bool restarted) {
     return true;
 }
 
+bool Solver::initialize_periodic(const std::string& prefix) {
+    (void)prefix;
+    for (const auto& pair_cfg : periodic_config_.pairs) {
+        int slave_tag = -1, master_tag = -1;
+        try {
+            slave_tag = std::stoi(pair_cfg.slave);
+            master_tag = std::stoi(pair_cfg.master);
+        } catch (...) {
+            for (const auto& bg : mesh_.boundary_groups) {
+                if (bg.name == pair_cfg.slave) slave_tag = bg.tag;
+                if (bg.name == pair_cfg.master) master_tag = bg.tag;
+            }
+        }
+        if (slave_tag >= 0 && master_tag >= 0) {
+            std::vector<int> slave_nodes, master_nodes;
+            if (!mesh_.boundary_groups.empty()) {
+                for (const auto& bg : mesh_.boundary_groups) {
+                    if (bg.tag == slave_tag) {
+                        for (int s : bg.sides) {
+                            slave_nodes.push_back(mesh_.iside[static_cast<std::size_t>(s)].node1);
+                            slave_nodes.push_back(mesh_.iside[static_cast<std::size_t>(s)].node2);
+                        }
+                    } else if (bg.tag == master_tag) {
+                        for (int s : bg.sides) {
+                            master_nodes.push_back(mesh_.iside[static_cast<std::size_t>(s)].node1);
+                            master_nodes.push_back(mesh_.iside[static_cast<std::size_t>(s)].node2);
+                        }
+                    }
+                }
+            } else {
+                // Legacy mesh where sides have side_id
+                for (const auto& side : mesh_.iside) {
+                    if (side.side_id == slave_tag) {
+                        slave_nodes.push_back(side.node1);
+                        slave_nodes.push_back(side.node2);
+                    } else if (side.side_id == master_tag) {
+                        master_nodes.push_back(side.node1);
+                        master_nodes.push_back(side.node2);
+                    }
+                }
+            }
+            std::sort(slave_nodes.begin(), slave_nodes.end());
+            slave_nodes.erase(std::unique(slave_nodes.begin(), slave_nodes.end()), slave_nodes.end());
+            std::sort(master_nodes.begin(), master_nodes.end());
+            master_nodes.erase(std::unique(master_nodes.begin(), master_nodes.end()), master_nodes.end());
+
+            std::optional<std::array<double, 2>> trans;
+            if (!pair_cfg.auto_translation) trans = pair_cfg.translation;
+            match_periodic_boundary_nodes(mesh_, slave_nodes, master_nodes, trans);
+        }
+    }
+
+    // Auto-detect and match periodic boundaries if not already matched
+    if (!mesh_.has_periodic() && periodic_config_.pairs.empty()) {
+        std::map<int, std::vector<int>> periodic_patches;
+        for (const auto& side : mesh_.iside) {
+            if (side.flag == flags::kPeriodic) {
+                periodic_patches[side.side_id].push_back(side.node1);
+                periodic_patches[side.side_id].push_back(side.node2);
+            }
+        }
+        for (auto& [id, nodes] : periodic_patches) {
+            std::sort(nodes.begin(), nodes.end());
+            nodes.erase(std::unique(nodes.begin(), nodes.end()), nodes.end());
+        }
+        if (periodic_patches.size() == 2) {
+            auto it = periodic_patches.begin();
+            auto patch_a = it->second;
+            ++it;
+            auto patch_b = it->second;
+            match_periodic_boundary_nodes(mesh_, patch_a, patch_b);
+        }
+    }
+
+    if (mesh_.has_periodic()) {
+        std::cout << "Periodic boundary: enabled (" << mesh_.periodic_pairs.size()
+                  << " node pairs, " << mesh_.periodic_slave_nodes.size() << " slave nodes)\n";
+        if (periodic_config_.has_driving_force()) {
+            std::cout << " Periodic driving force: (" << periodic_config_.driving_force[0]
+                      << ", " << periodic_config_.driving_force[1] << ")\n";
+        }
+    }
+    return true;
+}
+
 void Solver::advance_temperature() {
     if (!thermal_config_.enabled) return;
 
@@ -356,6 +462,10 @@ void Solver::advance_temperature() {
 
     for (int ip = 0; ip < mesh_.npoin; ++ip) {
         T_[ip] += rhs_T_[ip] * elcoe2_[ip];
+    }
+
+    if (mesh_.has_periodic()) {
+        apply_periodic_field(mesh_, elcoe2_, T_);
     }
 
     apply_thermal_bcs(mesh_, thermal_config_, T_);
@@ -513,9 +623,23 @@ void Solver::run() {
             add_boussinesq_buoyancy(mesh_, thermal_config_, 1.0 / ani_, T_, rhs_u_, rhs_v_);
         }
 
+        if (periodic_config_.has_driving_force()) {
+            const double fx = periodic_config_.driving_force[0];
+            const double fy = periodic_config_.driving_force[1];
+            for (int ip = 0; ip < mesh_.npoin; ++ip) {
+                rhs_u_[ip] += fx * nodal_mass_[ip];
+                rhs_v_[ip] += fy * nodal_mass_[ip];
+            }
+        }
+
         for (int ip = 0; ip < mesh_.npoin; ++ip) {
             u_[ip] += rhs_u_[ip] * elcoe2_[ip];
             v_[ip] += rhs_v_[ip] * elcoe2_[ip];
+        }
+
+        if (mesh_.has_periodic()) {
+            apply_periodic_field(mesh_, elcoe2_, u_);
+            apply_periodic_field(mesh_, elcoe2_, v_);
         }
 
         apply_symmetry_bc(mesh_, u_, v_);
@@ -542,6 +666,11 @@ void Solver::run() {
         for (int ip = 0; ip < mesh_.npoin; ++ip) {
             u_[ip] += rhs_u_[ip] * elcoe2_[ip];
             v_[ip] += rhs_v_[ip] * elcoe2_[ip];
+        }
+
+        if (mesh_.has_periodic()) {
+            apply_periodic_field(mesh_, elcoe2_, u_);
+            apply_periodic_field(mesh_, elcoe2_, v_);
         }
 
         apply_symmetry_bc(mesh_, u_, v_);

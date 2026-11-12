@@ -37,6 +37,9 @@ std::vector<BoundaryTypeInfo> make_table() {
         {T::Outlet, "outlet", flags::kOutlet, T::Outlet,
          "Pressure outlet, p = 0 (velocity: natural / do-nothing condition).",
          {"outlets", "outflow", "pressure_outlet", "outlet_pressure", "exit", "fixed_pressure"}},
+        {T::Periodic, "periodic", flags::kPeriodic, T::Periodic,
+         "Periodic / cyclic boundary pair.",
+         {"cyclic", "cyclic_ami", "periodicity"}},
         {T::Symmetry, "symmetry", flags::kSymmetry, T::Symmetry,
          "Symmetry line / free-slip wall, u . n = 0.",
          {"sym", "symm", "symmetric", "symmetry_plane", "symmetry_line", "mirror", "slip", "slip_wall",
@@ -59,9 +62,6 @@ std::vector<BoundaryTypeInfo> make_table() {
         // ---------------------------------------------------------------
         // Recognised, not implemented (the mesh is rejected)
         // ---------------------------------------------------------------
-        {T::Periodic, "periodic", 0, T::Periodic,
-         "Periodic / cyclic boundary pair.",
-         {"cyclic", "cyclic_ami", "periodicity"}},
         {T::Farfield, "farfield", 0, T::Farfield,
          "Far-field / free-stream boundary.",
          {"far_field", "freestream", "free_stream"}},

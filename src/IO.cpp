@@ -638,6 +638,83 @@ bool IO::read_inflow_config(const std::string& filepath,
     return true;
 }
 
+bool IO::read_periodic(const std::string& filepath, PeriodicConfig& config) {
+    std::string error;
+    if (!read_periodic_config(filepath, config, error)) {
+        std::cerr << "ERROR: *.periodic FILE HAS INVALID FORMAT: " << error << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool IO::read_periodic_config(const std::string& filepath,
+                              PeriodicConfig& config,
+                              std::string& error) {
+    config = PeriodicConfig{};
+    error.clear();
+    std::error_code ec;
+    if (!std::filesystem::exists(filepath, ec)) {
+        return true;
+    }
+    std::ifstream in(filepath);
+    if (!in.is_open()) {
+        error = "cannot open " + filepath;
+        return false;
+    }
+
+    std::string line;
+    int line_number = 0;
+    while (std::getline(in, line)) {
+        ++line_number;
+        auto hash_pos = line.find('#');
+        if (hash_pos != std::string::npos) line.erase(hash_pos);
+        auto slash_pos = line.find("//");
+        if (slash_pos != std::string::npos) line.erase(slash_pos);
+
+        std::istringstream iss(line);
+        std::vector<std::string> tokens;
+        std::string token;
+        while (iss >> token) tokens.push_back(token);
+        if (tokens.empty()) continue;
+
+        std::string key = tokens[0];
+        for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        if (key == "driving_force" || key == "body_force" || key == "force") {
+            std::size_t val_idx = 1;
+            if (val_idx < tokens.size() && tokens[val_idx] == "=") ++val_idx;
+            if (val_idx + 1 >= tokens.size()) {
+                error = filepath + ":" + std::to_string(line_number) + ": expected two force components fx fy";
+                return false;
+            }
+            try {
+                config.driving_force[0] = std::stod(tokens[val_idx]);
+                config.driving_force[1] = std::stod(tokens[val_idx + 1]);
+                config.enabled = true;
+            } catch (const std::exception& e) {
+                error = filepath + ":" + std::to_string(line_number) + ": invalid number: " + e.what();
+                return false;
+            }
+        } else if (key == "pair") {
+            if (tokens.size() >= 3) {
+                PeriodicPairConfig p;
+                p.slave = tokens[1];
+                p.master = tokens[2];
+                if (tokens.size() >= 5) {
+                    try {
+                        p.translation[0] = std::stod(tokens[3]);
+                        p.translation[1] = std::stod(tokens[4]);
+                        p.auto_translation = false;
+                    } catch (...) {}
+                }
+                config.pairs.push_back(p);
+                config.enabled = true;
+            }
+        }
+    }
+    return true;
+}
+
 bool IO::read_case_mesh(const std::string& constant_dir, const std::string& casename, Mesh& mesh) {
     MeshFileLocation mesh_file;
     if (!locate_mesh_file(constant_dir, casename, mesh_file)) return false;

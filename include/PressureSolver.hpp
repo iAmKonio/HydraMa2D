@@ -42,6 +42,7 @@
 #include "BoundaryConditions.hpp"
 #include "Config.hpp"
 #include "Mesh.hpp"
+#include "numerics/Periodic.hpp"
 #include "linalg/Convergence.hpp"
 #include "linalg/CsrAssembly.hpp"
 #include "linalg/CsrMatrix.hpp"
@@ -98,6 +99,8 @@ public:
     const linalg::KrylovSolver& krylov() const { return *krylov_; }
     const linalg::Preconditioner& preconditioner() const { return *precond_; }
     const linalg::DirichletConstraints& constraints() const { return constraints_; }
+    const PeriodicMapping& periodic_mapping() const { return periodic_map_; }
+    bool has_periodic() const { return periodic_map_.has_periodic; }
 
     // The operator used by the Krylov iteration (after update()).
     const linalg::LinearOperator& op() const;
@@ -134,6 +137,10 @@ private:
 
     const linalg::LinearOperator* op_ = nullptr;
     bool precond_ready_ = false;
+
+    PeriodicMapping periodic_map_;
+    std::unique_ptr<linalg::PeriodicReducedOperator> reduced_op_;
+    linalg::DirichletConstraints reduced_constraints_;
 
     // Setup reuse: element data of the last numeric setup.
     bool reuse_ = false;
