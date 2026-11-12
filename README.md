@@ -442,3 +442,10 @@ cd Hinterkante.dev.Re100
 | **507** | Backward Facing Step polynomial inflow profile ($v = 0.0$) |
 
 New code classifies these codes through `classify_boundary_flag()` (`include/BoundaryKind.hpp`): 500/501/502 → wall, 503/507 → inlet, 504 → outlet, 506 → symmetry, anything else → unknown.
+
+---
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
