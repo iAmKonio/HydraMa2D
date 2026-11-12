@@ -40,7 +40,7 @@ struct TransportedScalar {
     std::vector<double>* rhs = nullptr;               // output (resized, overwritten)
 };
 
-// Instantiated for N = 1, 2, 3.
+// Instantiated for N = 1, 2, 3, 4.
 template <int N>
 void assemble_scalar_transport(const Mesh& mesh,
                                const std::vector<double>& u,

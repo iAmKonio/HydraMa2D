@@ -42,6 +42,12 @@ constexpr ModelName kModelNames[] = {
     {"launder-sharma-k-epsilon", TurbulenceModelType::LaunderSharmaKEpsilon},
     {"k-omega-sst", TurbulenceModelType::KOmegaSST},
     {"sst", TurbulenceModelType::KOmegaSST},
+    {"gamma-re-theta-sst", TurbulenceModelType::GammaReThetaSST},
+    {"gamma-retheta-sst", TurbulenceModelType::GammaReThetaSST},
+    {"gamma-re-theta", TurbulenceModelType::GammaReThetaSST},
+    {"k-omega-sst-gamma-retheta", TurbulenceModelType::GammaReThetaSST},
+    {"transition-sst", TurbulenceModelType::GammaReThetaSST},
+    {"langtry-menter", TurbulenceModelType::GammaReThetaSST},
 };
 
 struct TreatmentName {

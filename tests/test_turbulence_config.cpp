@@ -70,7 +70,8 @@ TEST_CASE("Turbulence config: defaults", "[turbulence_config]") {
 TEST_CASE("Turbulence config: wall treatment defaults per model", "[turbulence_config]") {
     TurbulenceConfig c;
     for (auto m : {TurbulenceModelType::SpalartAllmaras, TurbulenceModelType::KOmegaSST,
-                   TurbulenceModelType::LaunderSharmaKEpsilon, TurbulenceModelType::None}) {
+                   TurbulenceModelType::GammaReThetaSST, TurbulenceModelType::LaunderSharmaKEpsilon,
+                   TurbulenceModelType::None}) {
         c.model = m;
         CHECK(c.effective_wall_treatment() == WallTreatmentType::LowRe);
     }
@@ -228,16 +229,20 @@ TEST_CASE("Turbulence config: model and wall treatment names", "[turbulence_conf
     const auto model = GENERATE(TurbulenceModelType::None, TurbulenceModelType::SpalartAllmaras,
                                 TurbulenceModelType::KEpsilon, TurbulenceModelType::RngKEpsilon,
                                 TurbulenceModelType::RealizableKEpsilon, TurbulenceModelType::LaunderSharmaKEpsilon,
-                                TurbulenceModelType::KOmegaSST);
+                                TurbulenceModelType::KOmegaSST, TurbulenceModelType::GammaReThetaSST);
     CHECK(parse_turbulence_model(to_string(model)) == model); // canonical names round-trip
 
     CHECK(parse_turbulence_model("laminar") == TurbulenceModelType::None);
     CHECK(parse_turbulence_model("SA") == TurbulenceModelType::SpalartAllmaras);
     CHECK(parse_turbulence_model("sa-neg") == TurbulenceModelType::SpalartAllmaras);
     CHECK(parse_turbulence_model("SST") == TurbulenceModelType::KOmegaSST);
+    CHECK(parse_turbulence_model("gamma-retheta-sst") == TurbulenceModelType::GammaReThetaSST);
+    CHECK(parse_turbulence_model("transition-sst") == TurbulenceModelType::GammaReThetaSST);
+    CHECK(parse_turbulence_model("langtry-menter") == TurbulenceModelType::GammaReThetaSST);
     CHECK_FALSE(parse_turbulence_model("k-omega").has_value());
     CHECK(to_string(TurbulenceModelType::SpalartAllmaras) == "spalart-allmaras");
     CHECK(to_string(TurbulenceModelType::KOmegaSST) == "k-omega-sst");
+    CHECK(to_string(TurbulenceModelType::GammaReThetaSST) == "gamma-re-theta-sst");
 
     for (auto t : {WallTreatmentType::LowRe, WallTreatmentType::WallFunction, WallTreatmentType::Automatic}) {
         CHECK(parse_wall_treatment(to_string(t)) == t);

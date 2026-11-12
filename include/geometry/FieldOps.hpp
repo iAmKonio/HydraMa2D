@@ -124,6 +124,7 @@ struct FlowKinematics {
     std::vector<VelocityGradient> grad_node; // recovered nodal gradient
     std::vector<double> strain_node;         // S from grad_node
     std::vector<double> vorticity_node;      // Omega from grad_node
+    std::vector<double> speed_node;          // U = hypot(u, v) from velocity
 
     void compute(const Mesh& mesh, const NodalGradient& recovery,
                  const std::vector<double>& u, const std::vector<double>& v);

@@ -77,6 +77,7 @@ add_executable(hydrama2d_tests
     test_turbulence_io.cpp
     test_solver_turbulence.cpp
     test_k_omega_sst.cpp
+    test_gamma_re_theta.cpp
     test_k_epsilon.cpp
     test_boundary_naming.cpp
     test_gmsh_reader.cpp
