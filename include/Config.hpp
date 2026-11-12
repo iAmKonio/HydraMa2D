@@ -32,6 +32,13 @@ struct ControlConfig {
     double l2norm_vel_tolerance = 1.0e-6;
     int runtime_mod = 0;
     VtkFormat vtk_format = VtkFormat::AsciiVtk;
+
+    // Phase 3.1: Dual Time-Stepping (BDF2)
+    bool dual_time = false;
+    int dual_time_max_subiter = 30;
+    double dual_time_tolerance = 1.0e-4;
+    double physical_dt = 0.0; // 0.0: use dtfix (if dtfixed == 1) or computed physical dt
+    double csafm_tau = 0.6;   // Pseudo-time CFL safety factor (defaults to csafm)
 };
 
 struct PhysicalConfig {

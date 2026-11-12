@@ -70,6 +70,47 @@ public:
         periodic_config_.driving_force = {fx, fy};
         periodic_config_.enabled = true;
     }
+
+    // Dual time-stepping (BDF2) controls (Phase 3.1)
+    void set_dual_time(bool enable, int max_subiter = 30, double tol = 1.0e-4, double dt_phys = 0.0) {
+        config_.control.dual_time = enable;
+        config_.control.dual_time_max_subiter = max_subiter;
+        config_.control.dual_time_tolerance = tol;
+        if (dt_phys > 0.0) {
+            config_.control.physical_dt = dt_phys;
+        }
+    }
+    bool is_dual_time() const noexcept { return config_.control.dual_time; }
+    int last_subiterations() const noexcept { return last_subiter_; }
+    int total_subiterations() const noexcept { return total_subiter_; }
+    double last_subiteration_residual() const noexcept { return last_sub_res_; }
+    double physical_dt() const noexcept { return dt_phys_; }
+    double rtime() const noexcept { return rtime_; }
+    double compute_physical_cfl() const;
+
+    void set_state(std::vector<double> u, std::vector<double> v, std::vector<double> p) {
+        u_ = u;
+        v_ = v;
+        p_ = p;
+        u_n_ = u;
+        v_n_ = v;
+        p_n_ = p;
+        u_old_ = u;
+        v_old_ = v;
+        p_old_ = p;
+        velocity_.resize(u_.size());
+        for (std::size_t i = 0; i < u_.size(); ++i) {
+            velocity_[i] = std::sqrt(u_[i] * u_[i] + v_[i] * v_[i] + 1.0e-16);
+        }
+    }
+
+    void set_previous_state(std::vector<double> u_prev, std::vector<double> v_prev, std::vector<double> p_prev) {
+        u_prev_ = std::move(u_prev);
+        v_prev_ = std::move(v_prev);
+        p_prev_ = std::move(p_prev);
+        has_prev_state_ = true;
+    }
+
     void set_max_steps(int n) {
         config_.override_ntime = n;
         config_.control.ntime = n;
@@ -121,6 +162,29 @@ private:
     std::vector<double> v_old_;
     std::vector<double> p_;
     std::vector<double> p_old_;
+
+    // Physical time history for multi-step schemes (e.g. BDF2)
+    std::vector<double> u_prev_;
+    std::vector<double> v_prev_;
+    std::vector<double> p_prev_;
+    std::vector<double> u_n_;
+    std::vector<double> v_n_;
+    std::vector<double> p_n_;
+
+    // Sub-iteration state in pseudo-time
+    std::vector<double> u_sub_old_;
+    std::vector<double> v_sub_old_;
+    std::vector<double> p_sub_old_;
+    std::vector<double> delte_star_;
+
+    // Dual time diagnostics
+    int last_subiter_ = 0;
+    int total_subiter_ = 0;
+    double last_sub_res_ = 0.0;
+    double dt_phys_ = 0.0;
+    bool has_prev_state_ = false;
+
+    void advance_dual_time_step(int iitime);
 
     std::vector<double> velocity_;
     std::vector<double> velocity_old_;

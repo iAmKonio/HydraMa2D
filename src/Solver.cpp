@@ -134,6 +134,27 @@ bool Solver::initialize() {
     p_.assign(npoin, 0.0001);
     p_old_.assign(npoin, 0.0001);
 
+    // Phase 3.1: Dual time-stepping history and sub-iteration work vectors
+    u_prev_.assign(npoin, 0.0);
+    v_prev_.assign(npoin, 0.0);
+    p_prev_.assign(npoin, 0.0001);
+    u_n_.assign(npoin, 0.0);
+    v_n_.assign(npoin, 0.0);
+    p_n_.assign(npoin, 0.0001);
+    u_sub_old_.assign(npoin, 0.0);
+    v_sub_old_.assign(npoin, 0.0);
+    p_sub_old_.assign(npoin, 0.0001);
+    delte_star_.assign(mesh_.nelem, 0.0);
+    last_subiter_ = 0;
+    total_subiter_ = 0;
+    last_sub_res_ = 0.0;
+    dt_phys_ = 0.0;
+    if (config_.control.physical_dt > 0.0) {
+        dt_phys_ = config_.control.physical_dt;
+    } else if (config_.control.dtfixed == 1 && config_.control.dtfix > 0.0) {
+        dt_phys_ = config_.control.dtfix;
+    }
+
     velocity_.resize(npoin);
     velocity_old_.resize(npoin);
     for (int ip = 0; ip < npoin; ++ip) {
@@ -170,6 +191,13 @@ bool Solver::initialize() {
         istart_ = 1;
         rtime_ = 0.0;
     }
+
+    u_n_ = u_;
+    v_n_ = v_;
+    p_n_ = p_;
+    u_prev_ = u_;
+    v_prev_ = v_;
+    p_prev_ = p_;
 
     // Allocate work vectors
     rhs_u_.resize(npoin);
@@ -251,13 +279,26 @@ void Solver::record_monitors(int iitime, bool force) {
     if (!monitors_ || iitime == last_sampled_step_) return;
     if (!force && iitime % monitors_->config().interval != 0) return;
     // Transient runs have one global time step: the force includes du/dt.
-    const bool transient = config_.control.transient_on > 0 && !delte_.empty() && delte_[0] > 0.0;
+    const bool transient = (config_.control.transient_on > 0 && !delte_.empty() && delte_[0] > 0.0) ||
+                           (config_.control.dual_time && dt_phys_ > 0.0);
     if (transient) {
         dudt_.resize(u_.size());
         dvdt_.resize(v_.size());
-        for (std::size_t i = 0; i < u_.size(); ++i) {
-            dudt_[i] = (u_[i] - u_old_[i]) / delte_[0];
-            dvdt_[i] = (v_[i] - v_old_[i]) / delte_[0];
+        if (config_.control.dual_time && dt_phys_ > 0.0) {
+            const int n_phys = iitime - istart_ + 1;
+            const double a0 = (n_phys >= 2) ? 1.5 : 1.0;
+            const double a1 = (n_phys >= 2) ? -2.0 : -1.0;
+            const double a2 = (n_phys >= 2) ? 0.5 : 0.0;
+            const double inv_dt = 1.0 / dt_phys_;
+            for (std::size_t i = 0; i < u_.size(); ++i) {
+                dudt_[i] = (a0 * u_[i] + a1 * u_n_[i] + a2 * u_prev_[i]) * inv_dt;
+                dvdt_[i] = (a0 * v_[i] + a1 * v_n_[i] + a2 * v_prev_[i]) * inv_dt;
+            }
+        } else {
+            for (std::size_t i = 0; i < u_.size(); ++i) {
+                dudt_[i] = (u_[i] - u_old_[i]) / delte_[0];
+                dvdt_[i] = (v_[i] - v_old_[i]) / delte_[0];
+            }
         }
     }
     last_sample_ = monitors_->evaluate(mesh_, ani_, u_, v_, p_, transient ? &dudt_ : nullptr,
@@ -570,6 +611,241 @@ void Solver::output_results(int iitime, double time_val) {
     }
 }
 
+double Solver::compute_physical_cfl() const {
+    double dt = dt_phys_;
+    if (dt <= 0.0) {
+        if (config_.control.physical_dt > 0.0) {
+            dt = config_.control.physical_dt;
+        } else if (config_.control.dtfixed == 1 && config_.control.dtfix > 0.0) {
+            dt = config_.control.dtfix;
+        } else if (!delte_.empty() && delte_[0] > 0.0) {
+            dt = delte_[0];
+        } else {
+            dt = 1.0e-3;
+        }
+    }
+
+    double max_cfl = 0.0;
+    double ref_vel = 1.0;
+    if (inflow_config_.has_default) {
+        ref_vel = std::hypot(inflow_config_.default_u, inflow_config_.default_v);
+        if (ref_vel <= 1.0e-12) ref_vel = 1.0;
+    }
+
+    for (int ie = 0; ie < mesh_.nelem; ++ie) {
+        const double amin = mesh_.alen_e[ie];
+        if (amin <= 1.0e-15) continue;
+        const ElementNodes nodes = mesh_.element_nodes(ie);
+        double velc = 0.0;
+        for (int in = 0; in < nodes.size(); ++in) {
+            const int ip = nodes[in];
+            velc = std::max(velc, std::hypot(u_[ip], v_[ip]));
+        }
+        if (velc <= 1.0e-5) velc = ref_vel;
+        const double cfl_conv = velc * dt / amin;
+        max_cfl = std::max(max_cfl, cfl_conv);
+    }
+    return max_cfl;
+}
+
+void Solver::advance_dual_time_step(int iitime) {
+    const int n_phys = iitime - istart_ + 1;
+
+    // 1. Determine physical time step size
+    if (config_.control.physical_dt > 0.0) {
+        dt_phys_ = config_.control.physical_dt;
+    } else if (config_.control.dtfixed == 1 && config_.control.dtfix > 0.0) {
+        dt_phys_ = config_.control.dtfix;
+    } else if (dt_phys_ <= 0.0) {
+        dt_phys_ = (config_.control.dtfix > 0.0) ? config_.control.dtfix : 1.0e-3;
+    }
+
+    // 2. Multi-step BDF coefficients:
+    // n_phys == 1: BDF1 (first-order startup: (u^{n+1} - u^n) / dt)
+    // n_phys >= 2: BDF2 (second-order: (3*u^{n+1} - 4*u^n + u^{n-1}) / (2*dt))
+    double alpha0 = 1.0;
+    double alpha1 = -1.0;
+    double alpha2 = 0.0;
+    if (n_phys >= 2 || has_prev_state_) {
+        alpha0 = 1.5;
+        alpha1 = -2.0;
+        alpha2 = 0.5;
+    }
+
+    // 3. Compute pseudo-time step delta_tau across elements for CFL stability
+    const double pseudo_cfl = (config_.control.csafm_tau > 0.0) ? config_.control.csafm_tau : config_.control.csafm;
+    if (turbulence_ || thermal_config_.enabled) {
+        update_effective_viscosity();
+        compute_timestep(config_.solver.solver_opt,
+                         config_.control.dtfixed,
+                         0, // pseudo-time marches to steady state
+                         config_.control.dtfix,
+                         nu_eff_elem_,
+                         pseudo_cfl,
+                         mesh_,
+                         velocity_,
+                         delte_);
+    } else {
+        compute_timestep(config_.solver.solver_opt,
+                         config_.control.dtfixed,
+                         0, // pseudo-time marches to steady state
+                         config_.control.dtfix,
+                         ani_,
+                         pseudo_cfl,
+                         mesh_,
+                         velocity_,
+                         delte_);
+    }
+
+    if (dt_phys_ <= 0.0 && !delte_.empty() && delte_[0] > 0.0) {
+        dt_phys_ = 10.0 * delte_[0];
+    }
+
+    // 4. Compute effective pseudo-time step delta_tau* = delta_tau / (1 + alpha0 * delta_tau / dt_phys)
+    delte_star_.resize(mesh_.nelem);
+    for (int ie = 0; ie < mesh_.nelem; ++ie) {
+        delte_star_[ie] = delte_[ie] / (1.0 + alpha0 * (delte_[ie] / dt_phys_));
+    }
+
+    // 5. Update LHS lumped mass inverse and Laplacian scaled by delta_tau*
+    update_lhs(mesh_, delte_star_, elcoe2_, pdiag_, gstif_);
+    pressure_solver_->update(mesh_, gstif_, pdiag_);
+
+    // 6. Sub-iteration initialization:
+    // Initial guess at m = 0: u^m = u^n, v^m = v^n, p^m = p^n
+    u_ = u_n_;
+    v_ = v_n_;
+    p_ = p_n_;
+
+    int subiter_used = 0;
+    double last_sub_res = 1.0;
+    const int max_subiters = (config_.control.dual_time_max_subiter > 0) ? config_.control.dual_time_max_subiter : 30;
+    const double tol = (config_.control.dual_time_tolerance > 0.0) ? config_.control.dual_time_tolerance : 1.0e-4;
+
+    for (int sub = 0; sub < max_subiters; ++sub) {
+        subiter_used = sub + 1;
+
+        u_sub_old_ = u_;
+        v_sub_old_ = v_;
+        p_sub_old_ = p_;
+
+        // --- Step 1: Intermediate Velocity Calculation ---
+        if (turbulence_) {
+            compute_step1(mesh_, ani_, turbulence_->nut_elem(), delte_, u_, v_, rhs_u_, rhs_v_);
+        } else {
+            compute_step1(mesh_, ani_, delte_, u_, v_, rhs_u_, rhs_v_);
+        }
+
+        if (thermal_config_.enabled) {
+            add_boussinesq_buoyancy(mesh_, thermal_config_, 1.0 / ani_, T_, rhs_u_, rhs_v_);
+        }
+
+        if (periodic_config_.has_driving_force()) {
+            const double fx = periodic_config_.driving_force[0];
+            const double fy = periodic_config_.driving_force[1];
+            for (int ip = 0; ip < mesh_.npoin; ++ip) {
+                rhs_u_[ip] += fx * nodal_mass_[ip];
+                rhs_v_[ip] += fy * nodal_mass_[ip];
+            }
+        }
+
+        // Add BDF source term: S = -(alpha0 * u^m + alpha1 * u^n + alpha2 * u^{n-1}) / dt_phys
+        const double inv_dt = 1.0 / dt_phys_;
+        for (int ip = 0; ip < mesh_.npoin; ++ip) {
+            const double su = -(alpha0 * u_[ip] + alpha1 * u_n_[ip] + alpha2 * u_prev_[ip]) * inv_dt;
+            const double sv = -(alpha0 * v_[ip] + alpha1 * v_n_[ip] + alpha2 * v_prev_[ip]) * inv_dt;
+            rhs_u_[ip] += su * nodal_mass_[ip];
+            rhs_v_[ip] += sv * nodal_mass_[ip];
+        }
+
+        for (int ip = 0; ip < mesh_.npoin; ++ip) {
+            u_[ip] += rhs_u_[ip] * elcoe2_[ip];
+            v_[ip] += rhs_v_[ip] * elcoe2_[ip];
+        }
+
+        if (mesh_.has_periodic()) {
+            apply_periodic_field(mesh_, elcoe2_, u_);
+            apply_periodic_field(mesh_, elcoe2_, v_);
+        }
+
+        apply_symmetry_bc(mesh_, u_, v_);
+        apply_velocity_bcs(mesh_, u_, v_, wall_specs_, inflow_config_);
+
+        // --- Step 2: Pressure Calculation (Poisson Eq) ---
+        compute_step2(mesh_, u_, v_, u_sub_old_, v_sub_old_, config_.control.theta[0], rhs1_);
+
+        const linalg::SolveResult pcg_res = pressure_solver_->solve(rhs1_, p_);
+        iiter_total_ += pcg_res.iterations;
+
+        // --- Step 3: Velocity Correction ---
+        compute_step3(mesh_, u_sub_old_, v_sub_old_, p_, p_sub_old_, delte_, rhs_u_, rhs_v_);
+
+        for (int ip = 0; ip < mesh_.npoin; ++ip) {
+            u_[ip] += rhs_u_[ip] * elcoe2_[ip];
+            v_[ip] += rhs_v_[ip] * elcoe2_[ip];
+        }
+
+        if (mesh_.has_periodic()) {
+            apply_periodic_field(mesh_, elcoe2_, u_);
+            apply_periodic_field(mesh_, elcoe2_, v_);
+        }
+
+        apply_symmetry_bc(mesh_, u_, v_);
+        apply_velocity_bcs(mesh_, u_, v_, wall_specs_, inflow_config_);
+
+        // Check pseudo-time convergence
+        double du_sq = 0.0;
+        double u_sq = 0.0;
+        for (int ip = 0; ip < mesh_.npoin; ++ip) {
+            const double du = u_[ip] - u_sub_old_[ip];
+            const double dv = v_[ip] - v_sub_old_[ip];
+            du_sq += du * du + dv * dv;
+            u_sq += u_[ip] * u_[ip] + v_[ip] * v_[ip];
+        }
+        last_sub_res = std::sqrt(du_sq / (u_sq + 1.0e-30));
+
+        if (last_sub_res < tol && sub >= 1) {
+            break;
+        }
+    }
+
+    last_subiter_ = subiter_used;
+    total_subiter_ += subiter_used;
+    last_sub_res_ = last_sub_res;
+
+    // 7. Advance physical time
+    rtime_ += dt_phys_;
+
+    // 8. Turbulence & Thermal coupling
+    if (turbulence_) {
+        turbulence_->advance(turbulence_context(), {u_, v_});
+    }
+    if (thermal_config_.enabled) {
+        advance_temperature();
+    }
+
+    record_monitors(iitime);
+
+    // 9. Update physical time history
+    u_prev_ = u_n_;
+    v_prev_ = v_n_;
+    p_prev_ = p_n_;
+
+    u_n_ = u_;
+    v_n_ = v_;
+    p_n_ = p_;
+
+    u_old_ = u_;
+    v_old_ = v_;
+    p_old_ = p_;
+
+    // 10. Update velocity magnitude
+    velocity_old_ = velocity_;
+    for (int ip = 0; ip < mesh_.npoin; ++ip) {
+        velocity_[ip] = std::sqrt(u_[ip] * u_[ip] + v_[ip] * v_[ip] + 1.0e-16);
+    }
+}
+
 void Solver::run() {
     auto t_start = std::chrono::steady_clock::now();
     auto t1 = t_start;
@@ -582,10 +858,54 @@ void Solver::run() {
     for (int iitime = istart_; iitime <= config_.control.ntime; ++iitime) {
         completed_time = iitime;
 
-        // Store old timestep values
-        u_old_ = u_;
-        v_old_ = v_;
-        p_old_ = p_;
+        if (config_.control.dual_time) {
+            advance_dual_time_step(iitime);
+
+            auto t2 = std::chrono::steady_clock::now();
+
+            if (iitime % config_.control.iwrite == 0 || iitime_start) {
+                iitime_start = false;
+                std::cout << std::setw(8) << iitime
+                          << " DualSub: " << std::setw(3) << last_subiter_
+                          << " DualRes: " << std::setw(15) << std::setprecision(8) << std::scientific << last_sub_res_
+                          << " IterCum: " << std::setw(9) << iiter_total_ << "\n";
+                std::cout << " Time: " << std::setprecision(16) << std::scientific << rtime_ << "\n";
+                if (turbulence_) {
+                    std::cout << turbulence_log_line() << "\n";
+                }
+            }
+
+            // Output intervals
+            if (iitime % config_.control.write_output == 0) {
+                std::cout << " Iterations Threshold Exceeded\n";
+                std::cout << " Outputting Data at: " << iitime << "\n";
+                output_results(iitime, rtime_);
+                t1 = t2;
+            } else {
+                double elapsed = std::chrono::duration<double>(t2 - t1).count();
+                if (elapsed > config_.control.write_time_output) {
+                    std::cout << " CPU Time Threshold Exceeded\n";
+                    std::cout << " Outputting Data at: " << iitime << "\n";
+                    output_results(iitime, rtime_);
+                    t1 = t2;
+                } else {
+                    if (rtime_ > rtime_output) {
+                        std::cout << " Transient Output Interval Exceeded\n";
+                        std::cout << " Outputting Data at: " << iitime << " " << rtime_output << "\n";
+                        output_results(iitime, rtime_);
+                        rtime_output += config_.control.time_output_interval;
+                        t1 = t2;
+                    }
+                    if (rtime_ > config_.control.end_rtime) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Store old timestep values
+            u_old_ = u_;
+            v_old_ = v_;
+            p_old_ = p_;
 
         // Calculate time step size
         if (turbulence_ || thermal_config_.enabled) {
@@ -785,6 +1105,7 @@ void Solver::run() {
                 }
             }
         }
+        } // end of non-dual-time else branch
     }
 
     // The final state of the run is always sampled (e.g. a steady run that
@@ -801,7 +1122,7 @@ void Solver::run() {
                   << " rescaled reuses, " << st.structure_builds << " structure builds\n";
     }
 
-    if (config_.control.transient_on < 1) {
+    if (config_.control.transient_on < 1 && !config_.control.dual_time) {
         std::cout << " Outputting Data\n";
         output_results(completed_time, rtime_);
     }
@@ -812,7 +1133,7 @@ void Solver::run() {
              << " (surface: cd " << last_sample_.cd_surface << ", cl " << last_sample_.cl_surface << ")\n";
         std::cout << line.str();
 
-        if (monitor_time_history_.size() >= 20 && config_.control.transient_on > 0) {
+        if (monitor_time_history_.size() >= 20 && (config_.control.transient_on > 0 || config_.control.dual_time)) {
             const auto shedding = analyze_shedding();
             if (shedding.is_periodic) {
                 const std::string bname = monitors_->config().body.empty() ? "body" : monitors_->config().body.front();
