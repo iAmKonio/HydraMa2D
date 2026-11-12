@@ -1,5 +1,6 @@
 #include "turbulence/TurbulenceFactory.hpp"
 
+#include "turbulence/GammaReThetaSST.hpp"
 #include "turbulence/KEpsilon.hpp"
 #include "turbulence/KOmegaSST.hpp"
 #include "turbulence/SpalartAllmaras.hpp"
@@ -45,6 +46,11 @@ std::unique_ptr<TurbulenceModel> create_launder_sharma(const TurbulenceConfig& c
     return std::make_unique<LaunderSharmaKEpsilon>(config);
 }
 
+std::unique_ptr<TurbulenceModel> create_gamma_re_theta_sst(const TurbulenceConfig& config) {
+    require_wall_treatment(config, WallTreatmentType::LowRe, "");
+    return std::make_unique<GammaReThetaSST>(config);
+}
+
 struct Entry {
     TurbulenceModelType model;
     Creator create;
@@ -54,6 +60,7 @@ struct Entry {
 constexpr Entry kRegistry[] = {
     {TurbulenceModelType::SpalartAllmaras, &create_spalart_allmaras},
     {TurbulenceModelType::KOmegaSST, &create_k_omega_sst},
+    {TurbulenceModelType::GammaReThetaSST, &create_gamma_re_theta_sst},
     {TurbulenceModelType::KEpsilon, &create_k_epsilon},
     {TurbulenceModelType::LaunderSharmaKEpsilon, &create_launder_sharma},
 };

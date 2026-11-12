@@ -51,6 +51,7 @@ enum class TurbulenceModelType {
     RealizableKEpsilon,
     LaunderSharmaKEpsilon, // low-Re
     KOmegaSST,             // Menter 2003
+    GammaReThetaSST,       // Langtry-Menter (2009) 4-equation transition model
 };
 
 enum class WallTreatmentType {

@@ -140,6 +140,8 @@ template void assemble_scalar_transport<2>(const Mesh&, const std::vector<double
                                            const std::vector<double>&, const std::array<TransportedScalar, 2>&);
 template void assemble_scalar_transport<3>(const Mesh&, const std::vector<double>&, const std::vector<double>&,
                                            const std::vector<double>&, const std::array<TransportedScalar, 3>&);
+template void assemble_scalar_transport<4>(const Mesh&, const std::vector<double>&, const std::vector<double>&,
+                                           const std::vector<double>&, const std::array<TransportedScalar, 4>&);
 
 void assemble_scalar_transport(const Mesh& mesh,
                                const std::vector<double>& u,

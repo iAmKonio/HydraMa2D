@@ -161,6 +161,7 @@ add_library(hydrama2d_core STATIC
     src/turbulence/TurbulenceConfig.cpp
     src/turbulence/KEpsilon.cpp
     src/turbulence/KOmegaSST.cpp
+    src/turbulence/GammaReThetaSST.cpp
     src/turbulence/TurbulenceFactory.cpp
     src/turbulence/WallFunctions.cpp
     src/turbulence/WallUnits.cpp

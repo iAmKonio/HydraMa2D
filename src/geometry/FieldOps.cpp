@@ -416,8 +416,10 @@ void FlowKinematics::compute(const Mesh& mesh, const NodalGradient& recovery,
     recovery.velocity_gradient(u, v, grad_node);
     strain_node.resize(mesh.npoin);
     vorticity_node.resize(mesh.npoin);
+    speed_node.resize(mesh.npoin);
     #pragma omp parallel for schedule(static)
     for (int ip = 0; ip < mesh.npoin; ++ip) {
+        speed_node[ip] = std::hypot(u[ip], v[ip]);
         strain_node[ip] = strain_rate_magnitude(grad_node[ip]);
         vorticity_node[ip] = vorticity_magnitude(grad_node[ip]);
     }
