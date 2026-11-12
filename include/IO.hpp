@@ -128,6 +128,24 @@ public:
                           const std::vector<double>& p,
                           const std::vector<NamedField>& point_scalars);
 
+    // Write XML VTK UnstructuredGrid (.vtu) with raw binary appended data blocks.
+    // If compress is true and HydraMa2D was compiled with ZLIB, data blocks are
+    // compressed using zlib deflate streams (compressor="vtkZLibDataCompressor").
+    static bool write_vtu(const std::string& filepath,
+                          const Mesh& mesh,
+                          const std::vector<double>& u,
+                          const std::vector<double>& v,
+                          const std::vector<double>& p,
+                          bool compress = false);
+
+    static bool write_vtu(const std::string& filepath,
+                          const Mesh& mesh,
+                          const std::vector<double>& u,
+                          const std::vector<double>& v,
+                          const std::vector<double>& p,
+                          const std::vector<NamedField>& point_scalars,
+                          bool compress = false);
+
     // Turbulence restart file (results/<case>.turb.var), written with 17
     // significant digits so that restarted runs continue bit for bit:
     //   HydraMa2D-turbulence-restart 1

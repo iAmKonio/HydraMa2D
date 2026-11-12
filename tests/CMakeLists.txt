@@ -106,6 +106,7 @@ add_executable(hydrama2d_tests
     test_periodic.cpp
     test_inflow_bc.cpp
     test_openmp.cpp
+    test_vtu_io.cpp
 )
 target_link_libraries(hydrama2d_tests PRIVATE hydrama2d_core Catch2::Catch2WithMain)
 target_compile_options(hydrama2d_tests PRIVATE ${HYDRAMA2D_COMPILE_OPTIONS})
