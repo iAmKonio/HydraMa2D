@@ -2,6 +2,7 @@
 
 #include "Config.hpp"
 #include "Mesh.hpp"
+#include "BoundaryConditions.hpp"
 #include "turbulence/TurbulenceConfig.hpp"
 #include <map>
 #include <string>
@@ -45,6 +46,10 @@ public:
     // Optional system/<case>.turbulence: a missing file yields a laminar
     // configuration (config.present == false) and returns true.
     static bool read_turbulence(const std::string& filepath, TurbulenceConfig& config);
+
+    // Optional system/<case>.walls: missing file leaves wall_specs empty and returns true.
+    static bool read_walls(const std::string& filepath, std::map<int, MovingWallSpec>& wall_specs);
+    static bool read_walls_config(const std::string& filepath, std::map<int, MovingWallSpec>& wall_specs, std::string& error);
 
     static bool read_mesh(const std::string& filepath, Mesh& mesh);
     static bool read_boundary_flags(const std::string& filepath, Mesh& mesh);

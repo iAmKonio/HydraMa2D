@@ -31,6 +31,10 @@ public:
     // nullptr for laminar runs.
     const TurbulenceModel* turbulence_model() const { return turbulence_.get(); }
 
+    // Moving and rotating wall specifications (from system/<case>.walls or set_wall_specs)
+    void set_wall_specs(std::map<int, MovingWallSpec> specs) { wall_specs_ = std::move(specs); }
+    const std::map<int, MovingWallSpec>& wall_specs() const noexcept { return wall_specs_; }
+
 private:
     SimulationConfig config_;
     Mesh mesh_;
@@ -41,6 +45,9 @@ private:
     std::unique_ptr<TurbulenceModel> turbulence_;
     WallGeometry walls_;
     std::vector<double> nu_eff_elem_; // diffusivity for the time step limit
+
+    // Moving and rotating walls
+    std::map<int, MovingWallSpec> wall_specs_;
 
     // Physical parameter
     double ani_ = 0.0; // 1.0 / Re

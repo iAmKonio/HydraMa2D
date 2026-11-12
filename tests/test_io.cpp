@@ -533,7 +533,7 @@ TEST_CASE("read_boundary_flags error handling", "[io][flags]") {
         CHECK_FALSE(IO::read_boundary_flags((dir / "t.bofl").string(), m));
     }
     SECTION("unknown flag code is accepted with a warning") {
-        write_text(dir / "u.bofl", "4\n1 510\n2 504\n3 500\n4 503\n");
+        write_text(dir / "u.bofl", "4\n1 599\n2 504\n3 500\n4 503\n");
         std::string log;
         {
             CaptureStdout capture;
@@ -541,7 +541,7 @@ TEST_CASE("read_boundary_flags error handling", "[io][flags]") {
             log = capture.str();
         }
         CHECK(log.find("WARNING") != std::string::npos);
-        CHECK(m.iside[0].flag == 510);
+        CHECK(m.iside[0].flag == 599);
     }
     SECTION("duplicate table entries: the first one wins") {
         write_text(dir / "d.bofl", "5\n1 500\n1 501\n2 504\n3 500\n4 503\n");

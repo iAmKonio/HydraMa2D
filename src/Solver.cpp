@@ -45,6 +45,13 @@ bool Solver::initialize() {
     if (!IO::read_turbulence(prefix + "system/" + config_.casename + ".turbulence", turbulence_config_)) {
         return false;
     }
+
+    // Optional moving / rotating walls configuration (missing file: empty specs)
+    if (wall_specs_.empty()) {
+        if (!IO::read_walls(prefix + "system/" + config_.casename + ".walls", wall_specs_)) {
+            return false;
+        }
+    }
     if (!turbulence_) {
         try {
             turbulence_ = make_turbulence_model(turbulence_config_);
@@ -393,7 +400,7 @@ void Solver::run() {
         }
 
         apply_symmetry_bc(mesh_, u_, v_);
-        apply_velocity_bcs(mesh_, u_, v_);
+        apply_velocity_bcs(mesh_, u_, v_, wall_specs_);
 
         // ==========================================
         // Step 2: Pressure Calculation (Poisson Eq)
@@ -419,7 +426,7 @@ void Solver::run() {
         }
 
         apply_symmetry_bc(mesh_, u_, v_);
-        apply_velocity_bcs(mesh_, u_, v_);
+        apply_velocity_bcs(mesh_, u_, v_, wall_specs_);
 
         // ==========================================
         // Turbulence: advance with u^{n+1}, update nu_t

@@ -178,6 +178,7 @@ HydraMa.dev/
 │   ├── test_quad_patch.cpp       # Patch tests (also irregular meshes) and convergence orders
 │   ├── test_quad_solver.cpp      # Solver runs on quadrilateral and hybrid meshes
 │   ├── test_parabolic_inlet.cpp  # Fully developed inflow (508)
+│   ├── test_moving_wall.cpp      # Translating (509) and rotating (510) walls, lid-driven cavity
 │   ├── test_forces.cpp           # Body forces against closed-form values
 │   ├── test_probes.cpp           # Point location and interpolation
 │   ├── test_monitors.cpp         # *.monitors parser, data file, solver integration
@@ -368,6 +369,7 @@ ctest --test-dir build -R "[Nn]ormal"        # run tests whose name matches a (c
 | `[quadrature]` | `gauss_legendre`, `gauss_legendre_square` | tabulated nodes and weights, exactness for polynomials up to degree 2n−1 (and not 2n), symmetry, weight sums, high orders, invalid orders |
 | `[quad]` | `q1::*`, `Mesh` with quadrilaterals, `MeshBuilder`, CBS steps, `Solver` | partition of unity and Kronecker property of the shape functions, Jacobians / areas / gradients of affine and distorted elements, orientation repair and rejection of non-convex / degenerate elements, Mesh quantities (mass, Laplacian, sizes, normals, wall geometry) of quadrilateral and hybrid meshes vs. independent references, patch tests on regular and irregular (valence ≠ 4) meshes, second-order convergence of the Laplacian, Poiseuille flow on quadrilateral / hybrid / inflation-layer meshes, Gmsh / SU2 / CGNS quadrilateral fixtures, every turbulence model on a hybrid mesh, determinism |
 | `[inlet_parabolic]` | `parabolic_inlet_velocities`, `apply_velocity_bcs` | Poiseuille profile (mean 1, peak 1.5) along the inward normal for any side order and rotated meshes, separate segments, closed / branching / zero-length inlets, condition order 507 → 503 → 508 → walls, a channel that stays fully developed (inflow flux, symmetry) |
+| `[moving_wall]` | `moving_wall_velocities`, `apply_velocity_bcs`, `*.walls` | Translating wall (u, v), rotating wall (omega x r, auto-centering and explicit center), corner treatment (corners_zero), *.walls configuration parser, 2D lid-driven cavity simulation at Re = 100 |
 | `[post][forces]` | `surface_force`, `volume_force` | Couette flow exact with both forms on distorted triangle / quadrilateral / hybrid meshes, volume-form identities on a closed body (linear pressure, du/dt, convection vs. an independent 3 × 3 Gauss rule), first-order surface form for Poiseuille flow, rotation invariance, side orientation, validation |
 | `[post][probes]` | `locate_point`, `interpolate` | exact for linear fields (and bilinear fields on parallelograms), nodes, edges, boundary, holes, points outside |
 | `[post][monitors]` | `*.monitors` parser, `Monitors`, `Solver` | every key and error (with line numbers), bodies by name / tag / side id incl. sides in two groups, probes, data file format, results bit-identical with and without monitors, restart appends, solver errors |
@@ -562,8 +564,10 @@ The coefficients are computed in the volume ("reaction") form and from the surfa
 | **506** | Velocity symmetry / slip boundary ($\vec{u} \cdot \vec{n} = 0$) |
 | **507** | Backward Facing Step polynomial inflow profile ($v = 0.0$) |
 | **508** | Fully developed (parabolic, Poiseuille) inflow along the inward normal: mean velocity 1 over each connected inlet segment, 1.5 at its centre |
+| **509** | Moving wall translating with prescribed velocity $(u_w, v_w)$ (e.g. cavity lid) |
+| **510** | Rotating wall with prescribed angular velocity $\omega$ about axis $(x_c, y_c)$ |
 
-New code classifies these codes through `classify_boundary_flag()` (`include/BoundaryKind.hpp`): 500/501/502 → wall, 503/507/508 → inlet, 504 → outlet, 506 → symmetry, anything else → unknown.
+New code classifies these codes through `classify_boundary_flag()` (`include/BoundaryKind.hpp`): 500/501/502/509/510 → wall, 503/507/508 → inlet, 504 → outlet, 506 → symmetry, anything else → unknown.
 
 In Gmsh, SU2 and CGNS meshes the codes come from the **physical group / marker / BC names** (and the CGNS BCType):
 
@@ -577,10 +581,12 @@ In Gmsh, SU2 and CGNS meshes the codes come from the **physical group / marker /
 | `symmetry` | 506 |
 | `inlet_profile` | 507 |
 | `inlet_parabolic` (`parabolic_inlet`, `poiseuille_inlet`) | 508 |
+| `moving_wall` (`moving`, `sliding_wall`, `lid`) | 509 |
+| `rotating` (`rotating_wall`, `rotor`) | 510 |
 
 Aliases such as `no_slip`, `velocity_inlet`, `pressure_outlet` and `symmetryPlane` work too, and the keyword may appear anywhere in the name (`bottom_wall`, `Inlet-2`).
 
-Names of types the solver does not implement yet (`periodic`, `rotating`, `moving_wall`, `farfield`, `pressure_inlet`, ...) are recognised and rejected with a clear message. The complete list and the matching rules are in [docs/BOUNDARY_NAMING.md](docs/BOUNDARY_NAMING.md).
+Names of types the solver does not implement yet (`periodic`, `farfield`, `pressure_inlet`, ...) are recognised and rejected with a clear message. The complete list and the matching rules are in [docs/BOUNDARY_NAMING.md](docs/BOUNDARY_NAMING.md).
 
 ---
 

@@ -41,6 +41,7 @@ TEST_CASE("Implemented boundary types are exactly the legacy flag codes", "[boun
         {BoundaryType::Wall, 500},   {BoundaryType::WallHot, 501},  {BoundaryType::WallCold, 502},
         {BoundaryType::Inlet, 503},  {BoundaryType::Outlet, 504},   {BoundaryType::Symmetry, 506},
         {BoundaryType::InletProfile, 507}, {BoundaryType::InletParabolic, 508},
+        {BoundaryType::MovingWall, 509}, {BoundaryType::Rotating, 510},
     };
     std::set<int> seen_flags;
     for (const BoundaryTypeInfo& info : boundary_type_table()) {

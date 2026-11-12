@@ -1,4 +1,5 @@
 #include "Mesh.hpp"
+#include "BoundaryKind.hpp"
 #include <cmath>
 #include <iostream>
 #include <algorithm>
@@ -145,7 +146,7 @@ void Mesh::determine_wall_nodes() {
 
     for (int ib = 0; ib < nboun; ++ib) {
         int flag = iside[ib].flag;
-        if (flag == 500 || flag == 501 || flag == 502) {
+        if (classify_boundary_flag(flag) == BoundaryKind::Wall) {
             int nodes[2] = {iside[ib].node1, iside[ib].node2};
             for (int in = 0; in < 2; ++in) {
                 int ip = nodes[in];

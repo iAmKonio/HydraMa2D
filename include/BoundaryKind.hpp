@@ -21,11 +21,13 @@ inline constexpr int kOutlet = 504;        // pressure outlet (p = 0)
 inline constexpr int kSymmetry = 506;      // symmetry / slip (u . n = 0)
 inline constexpr int kInletProfile = 507;  // backward-facing-step polynomial inflow profile
 inline constexpr int kInletParabolic = 508; // fully developed (Poiseuille) inflow, mean velocity 1
+inline constexpr int kMovingWall = 509;    // wall translating with prescribed velocity (e.g. cavity lid)
+inline constexpr int kRotatingWall = 510;  // wall rotating about an axis (prescribed angular velocity)
 } // namespace flags
 
 enum class BoundaryKind : unsigned char {
     Unknown,   // unassigned (0) or unrecognised code (e.g. 505)
-    Wall,      // no-slip wall: 500, 501, 502
+    Wall,      // wall: 500, 501, 502, 509, 510
     Inlet,     // prescribed velocity: 503, 507, 508
     Outlet,    // prescribed pressure: 504
     Symmetry,  // slip / symmetry: 506
@@ -36,6 +38,8 @@ constexpr BoundaryKind classify_boundary_flag(int flag) noexcept {
     case flags::kWall:
     case flags::kWallHot:
     case flags::kWallCold:
+    case flags::kMovingWall:
+    case flags::kRotatingWall:
         return BoundaryKind::Wall;
     case flags::kInlet:
     case flags::kInletProfile:

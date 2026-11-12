@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Mesh.hpp"
+#include <map>
 #include <vector>
 
 namespace hydrama {
@@ -18,11 +19,27 @@ void apply_symmetry_bc(const Mesh& mesh,
 
 // Velocity Dirichlet conditions, in this order (the last one wins at
 // shared nodes): 507 step profile, 503 uniform inlet, 508 parabolic inlet,
-// walls (Mesh::wall_node_list). Throws std::invalid_argument if the 508
+// stationary walls, moving/rotating walls. Throws std::invalid_argument if the 508
 // sides do not form open chains (see parabolic_inlet_velocities).
+struct MovingWallSpec {
+    enum class Kind : unsigned char {
+        Translating, // constant velocity (u, v), e.g. a cavity lid
+        Rotating,    // rotating about an axis (center_x, center_y) with angular velocity omega
+    };
+    Kind kind = Kind::Translating;
+    double u = 1.0;
+    double v = 0.0;
+    double omega = 1.0;
+    double center_x = 0.0;
+    double center_y = 0.0;
+    bool auto_center = true; // if true, center is computed from centroid of patch nodes
+    bool corners_zero = false; // if true, nodes shared with stationary walls stay zero
+};
+
 void apply_velocity_bcs(const Mesh& mesh,
                         std::vector<double>& u,
-                        std::vector<double>& v);
+                        std::vector<double>& v,
+                        const std::map<int, MovingWallSpec>& wall_specs = {});
 
 // Prescribed velocity of one node.
 struct NodeVelocity {
@@ -30,6 +47,13 @@ struct NodeVelocity {
     double u = 0.0;
     double v = 0.0;
 };
+
+// Prescribed velocities of all moving (509) and rotating (510) wall nodes.
+// If specs does not define a boundary, default values (u=1, v=0 for 509;
+// omega=1 about centroid for 510) are used.
+std::vector<NodeVelocity> moving_wall_velocities(
+    const Mesh& mesh,
+    const std::map<int, MovingWallSpec>& wall_specs = {});
 
 // Fully developed inflow of the inlet_parabolic sides (flag 508).
 //

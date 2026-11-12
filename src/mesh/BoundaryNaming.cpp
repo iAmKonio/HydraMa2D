@@ -49,6 +49,12 @@ std::vector<BoundaryTypeInfo> make_table() {
          "over each connected inlet segment (1.5 at its centre).",
          {"parabolic_inlet", "parabolic_inflow", "poiseuille_inlet", "inlet_poiseuille", "fully_developed_inlet",
           "developed_inlet"}},
+        {T::MovingWall, "moving_wall", flags::kMovingWall, T::Wall,
+         "Wall translating with a prescribed tangential velocity (e.g. a cavity lid).",
+         {"moving", "sliding_wall", "translating_wall", "lid", "moving_lid"}},
+        {T::Rotating, "rotating", flags::kRotatingWall, T::Wall,
+         "Wall rotating about an axis (prescribed angular velocity).",
+         {"rotating_wall", "rotor", "spinning_wall"}},
 
         // ---------------------------------------------------------------
         // Recognised, not implemented (the mesh is rejected)
@@ -56,12 +62,6 @@ std::vector<BoundaryTypeInfo> make_table() {
         {T::Periodic, "periodic", 0, T::Periodic,
          "Periodic / cyclic boundary pair.",
          {"cyclic", "cyclic_ami", "periodicity"}},
-        {T::Rotating, "rotating", 0, T::Wall,
-         "Wall rotating about an axis (prescribed angular velocity).",
-         {"rotating_wall", "rotor", "spinning_wall"}},
-        {T::MovingWall, "moving_wall", 0, T::Wall,
-         "Wall translating with a prescribed tangential velocity (e.g. a cavity lid).",
-         {"moving", "sliding_wall", "translating_wall", "lid", "moving_lid"}},
         {T::Farfield, "farfield", 0, T::Farfield,
          "Far-field / free-stream boundary.",
          {"far_field", "freestream", "free_stream"}},

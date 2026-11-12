@@ -291,6 +291,9 @@ TEST_CASE("CGNS: BCType and name are combined by the naming rules", "[cgns][tran
     // BCWallInviscid is a slip wall: symmetry.
     CHECK(flags_of({"inlet", "outlet", "upper", "lower"}, {kBCTypeNull, kBCExtrapolate, kBCWallInviscid, kBCWall}) ==
           std::vector<std::pair<int, CS>>{{503, CS::Name}, {504, CS::Name}, {506, CS::FileType}, {500, CS::FileType}});
+    // Moving and rotating walls: specific wall names refine BCWall to 509 and 510.
+    CHECK(flags_of({"rotor_wall", "moving_wall", "exit", "inlet"}, {kBCWall, kBCWall, kBCOutflow, kBCInflow}) ==
+          std::vector<std::pair<int, CS>>{{510, CS::Name}, {509, CS::Name}, {504, CS::Name}, {503, CS::Name}});
 }
 
 TEST_CASE("CGNS: declared types that HydraMa2D rejects", "[cgns][translate][errors]") {
@@ -305,7 +308,7 @@ TEST_CASE("CGNS: declared types that HydraMa2D rejects", "[cgns][translate][erro
     CHECK_THAT(with(1, "far", kBCFarfield), ContainsSubstring("'far' (tag 2) is a 'farfield' boundary"));
     CHECK_THAT(with(0, "inflow_1", kBCInflowSupersonic), ContainsSubstring("is a 'supersonic_inlet' boundary"));
     CHECK_THAT(with(0, "pressure_inlet", kBCInflow), ContainsSubstring("is a 'pressure_inlet' boundary"));
-    CHECK_THAT(with(2, "rotor_wall", kBCWall), ContainsSubstring("is a 'rotating' boundary"));
+    CHECK_THAT(with(2, "periodic_1", kBCTypeNull), ContainsSubstring("is a 'periodic' boundary"));
     CHECK_THAT(with(3, "centreline", kBCSymmetryPolar), ContainsSubstring("is a 'axis' boundary"));
     CHECK_THAT(with(3, "front", kBCAxisymmetricWedge), ContainsSubstring("is a 'wedge' boundary"));
     CHECK_THAT(with(2, "upper", kBCDegenerateLine), ContainsSubstring("BC 'upper' (BC 3): BCDegenerateLine is not supported"));
