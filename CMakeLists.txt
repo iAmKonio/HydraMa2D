@@ -51,6 +51,31 @@ endif()
 set(HYDRAMA2D_COMPILE_OPTIONS -O3 -Wall -Wextra -pedantic -ffp-contract=off)
 
 # ---------------------------------------------------------------------------
+# Optional OpenMP shared-memory multi-threading
+# ---------------------------------------------------------------------------
+option(HYDRAMA2D_ENABLE_OPENMP "Enable OpenMP shared-memory multi-threading" ON)
+
+set(HYDRAMA2D_HAVE_OPENMP OFF)
+if(HYDRAMA2D_ENABLE_OPENMP)
+    if(APPLE AND NOT DEFINED OpenMP_ROOT)
+        if(EXISTS "/opt/homebrew/opt/libomp")
+            set(OpenMP_ROOT "/opt/homebrew/opt/libomp")
+        elseif(EXISTS "/usr/local/opt/libomp")
+            set(OpenMP_ROOT "/usr/local/opt/libomp")
+        endif()
+    endif()
+    find_package(OpenMP)
+    if(OpenMP_CXX_FOUND)
+        set(HYDRAMA2D_HAVE_OPENMP ON)
+        message(STATUS "HydraMa2D OpenMP multi-threading: enabled (OpenMP ${OpenMP_CXX_VERSION})")
+    else()
+        message(STATUS "HydraMa2D OpenMP multi-threading: disabled (OpenMP not found)")
+    endif()
+else()
+    message(STATUS "HydraMa2D OpenMP multi-threading: disabled (HYDRAMA2D_ENABLE_OPENMP=OFF)")
+endif()
+
+# ---------------------------------------------------------------------------
 # Core solver library: everything except the program entry point, so that the
 # executable and the unit tests link against the same compiled code.
 # ---------------------------------------------------------------------------
@@ -129,6 +154,10 @@ if(HYDRAMA2D_HAVE_CGNS)
     # hydrama2d_core link it through this (link-only) dependency.
     target_link_libraries(hydrama2d_core PRIVATE HydraMa2D::CGNS)
     target_compile_definitions(hydrama2d_core PRIVATE HYDRAMA2D_HAVE_CGNS=1)
+endif()
+if(HYDRAMA2D_HAVE_OPENMP)
+    target_link_libraries(hydrama2d_core PUBLIC OpenMP::OpenMP_CXX)
+    target_compile_definitions(hydrama2d_core PUBLIC HYDRAMA2D_HAVE_OPENMP=1)
 endif()
 
 # ---------------------------------------------------------------------------

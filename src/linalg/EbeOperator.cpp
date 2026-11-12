@@ -1,6 +1,7 @@
 #include "linalg/EbeOperator.hpp"
 
 #include "linalg/VectorOps.hpp"
+#include "numerics/OpenMP.hpp"
 
 #include <stdexcept>
 #include <string>
@@ -44,6 +45,7 @@ void ebe_apply(const Mesh& mesh,
         y[n[3]] += k03 * x0 + k13 * x1 + k23 * x2;
     }
 
+    #pragma omp parallel for schedule(static)
     for (int ip = 0; ip < npoin; ++ip) {
         y[ip] += x[ip] * pdiag[ip];
     }

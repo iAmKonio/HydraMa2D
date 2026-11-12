@@ -106,6 +106,8 @@ void Mesh::compute_shape_function_derivatives() {
     if (min_vol > 0.0) {
         std::cout << "Ratio of Max to Min " << (max_vol / min_vol) << "\n";
     }
+
+    compute_element_colors();
 }
 
 void Mesh::compute_mass_matrix() {
@@ -255,6 +257,101 @@ void Mesh::compute_laplacian_stiffness() {
     // Quadrilaterals: 2 x 2 Gauss-Legendre (numerics/QuadElement.hpp).
     quad_lap.resize(quads.size());
     for (int q = 0; q < num_quads(); ++q) quad_lap[static_cast<std::size_t>(q)] = q1::laplacian(quad_geom[static_cast<std::size_t>(q)]);
+}
+
+void Mesh::compute_element_colors() {
+    triangle_color_groups.clear();
+    quad_color_groups.clear();
+
+    // 1. Color triangles
+    const int ntri = num_triangles();
+    if (ntri > 0 && npoin > 0) {
+        std::vector<std::vector<int>> node_to_tri(static_cast<std::size_t>(npoin));
+        for (int ie = 0; ie < ntri; ++ie) {
+            for (int in = 0; in < nep; ++in) {
+                int ip = intma[ie][in];
+                if (ip >= 0 && ip < npoin) node_to_tri[static_cast<std::size_t>(ip)].push_back(ie);
+            }
+        }
+        std::vector<int> colors(static_cast<std::size_t>(ntri), -1);
+        std::vector<int> neighbor_colors;
+        int max_color = 0;
+        for (int ie = 0; ie < ntri; ++ie) {
+            neighbor_colors.clear();
+            for (int in = 0; in < nep; ++in) {
+                int ip = intma[ie][in];
+                if (ip >= 0 && ip < npoin) {
+                    for (int nbr : node_to_tri[static_cast<std::size_t>(ip)]) {
+                        if (nbr != ie && colors[static_cast<std::size_t>(nbr)] >= 0) {
+                            neighbor_colors.push_back(colors[static_cast<std::size_t>(nbr)]);
+                        }
+                    }
+                }
+            }
+            std::sort(neighbor_colors.begin(), neighbor_colors.end());
+            neighbor_colors.erase(std::unique(neighbor_colors.begin(), neighbor_colors.end()), neighbor_colors.end());
+            int c = 0;
+            for (int used : neighbor_colors) {
+                if (used == c) {
+                    ++c;
+                } else if (used > c) {
+                    break;
+                }
+            }
+            colors[static_cast<std::size_t>(ie)] = c;
+            if (c > max_color) max_color = c;
+        }
+        triangle_color_groups.resize(static_cast<std::size_t>(max_color + 1));
+        for (int ie = 0; ie < ntri; ++ie) {
+            triangle_color_groups[static_cast<std::size_t>(colors[static_cast<std::size_t>(ie)])].push_back(ie);
+        }
+    }
+
+    // 2. Color quadrilaterals
+    const int nq = num_quads();
+    if (nq > 0 && npoin > 0) {
+        std::vector<std::vector<int>> node_to_quad(static_cast<std::size_t>(npoin));
+        for (int q = 0; q < nq; ++q) {
+            const auto& n = quads[static_cast<std::size_t>(q)];
+            for (int a = 0; a < nep_quad; ++a) {
+                int ip = n[a];
+                if (ip >= 0 && ip < npoin) node_to_quad[static_cast<std::size_t>(ip)].push_back(q);
+            }
+        }
+        std::vector<int> colors(static_cast<std::size_t>(nq), -1);
+        std::vector<int> neighbor_colors;
+        int max_color = 0;
+        for (int q = 0; q < nq; ++q) {
+            neighbor_colors.clear();
+            const auto& n = quads[static_cast<std::size_t>(q)];
+            for (int a = 0; a < nep_quad; ++a) {
+                int ip = n[a];
+                if (ip >= 0 && ip < npoin) {
+                    for (int nbr : node_to_quad[static_cast<std::size_t>(ip)]) {
+                        if (nbr != q && colors[static_cast<std::size_t>(nbr)] >= 0) {
+                            neighbor_colors.push_back(colors[static_cast<std::size_t>(nbr)]);
+                        }
+                    }
+                }
+            }
+            std::sort(neighbor_colors.begin(), neighbor_colors.end());
+            neighbor_colors.erase(std::unique(neighbor_colors.begin(), neighbor_colors.end()), neighbor_colors.end());
+            int c = 0;
+            for (int used : neighbor_colors) {
+                if (used == c) {
+                    ++c;
+                } else if (used > c) {
+                    break;
+                }
+            }
+            colors[static_cast<std::size_t>(q)] = c;
+            if (c > max_color) max_color = c;
+        }
+        quad_color_groups.resize(static_cast<std::size_t>(max_color + 1));
+        for (int q = 0; q < nq; ++q) {
+            quad_color_groups[static_cast<std::size_t>(colors[static_cast<std::size_t>(q)])].push_back(q);
+        }
+    }
 }
 
 } // namespace hydrama

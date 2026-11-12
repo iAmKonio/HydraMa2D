@@ -135,6 +135,17 @@ public:
     void determine_wall_nodes();
     void compute_element_sizes();
     void compute_laplacian_stiffness();
+    void compute_element_colors();
+
+    // Element coloring for race-free parallel element loops (Phase 2.1).
+    // By graph coloring on vertex adjacency, no two elements in the same
+    // color group share any node.
+    std::vector<std::vector<int>> triangle_color_groups;
+    std::vector<std::vector<int>> quad_color_groups;
+
+    bool has_element_colors() const noexcept {
+        return !triangle_color_groups.empty() || !quad_color_groups.empty();
+    }
 };
 
 } // namespace hydrama

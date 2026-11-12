@@ -1,4 +1,5 @@
 #include "geometry/FieldOps.hpp"
+#include "numerics/OpenMP.hpp"
 
 #include <algorithm>
 
@@ -6,13 +7,34 @@ namespace hydrama {
 
 std::vector<double> lumped_nodal_mass(const Mesh& mesh) {
     std::vector<double> mass(mesh.npoin, 0.0);
-    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+    auto process_tri = [&](int ie) {
         const double third = mesh.detJ[ie] / 6.0; // area / 3
         for (int k = 0; k < Mesh::nep; ++k) mass[mesh.intma[ie][k]] += third;
+    };
+    if (!mesh.triangle_color_groups.empty()) {
+        for (const auto& grp : mesh.triangle_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_tri(grp[i]);
+            }
+        }
+    } else {
+        for (int ie = 0; ie < mesh.num_triangles(); ++ie) process_tri(ie);
     }
-    for (int q = 0; q < mesh.num_quads(); ++q) { // row-sum lumped: int N_a dOmega
+
+    auto process_quad = [&](int q) {
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
         for (int a = 0; a < Mesh::nep_quad; ++a) mass[n[a]] += mesh.quad_geom[static_cast<std::size_t>(q)].mass[a];
+    };
+    if (!mesh.quad_color_groups.empty()) {
+        for (const auto& grp : mesh.quad_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_quad(grp[i]);
+            }
+        }
+    } else {
+        for (int q = 0; q < mesh.num_quads(); ++q) process_quad(q);
     }
     return mass;
 }
@@ -20,6 +42,7 @@ std::vector<double> lumped_nodal_mass(const Mesh& mesh) {
 void compute_scalar_gradients(const Mesh& mesh, const std::vector<double>& phi,
                               std::vector<std::array<double, 2>>& grad) {
     grad.resize(mesh.nelem);
+    #pragma omp parallel for schedule(static)
     for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const auto& n = mesh.intma[ie];
         const double* dNdx = mesh.dNkdx[ie].dNdx;
@@ -28,6 +51,7 @@ void compute_scalar_gradients(const Mesh& mesh, const std::vector<double>& phi,
         grad[ie] = {dNdx[0] * p0 + dNdx[1] * p1 + dNdx[2] * p2,
                     dNdy[0] * p0 + dNdy[1] * p1 + dNdy[2] * p2};
     }
+    #pragma omp parallel for schedule(static)
     for (int ie = mesh.num_triangles(); ie < mesh.nelem; ++ie) { // area-averaged gradient
         const ElementNodes n = mesh.element_nodes(ie);
         const double* dNdx = mesh.dNkdx[ie].dNdx;
@@ -44,6 +68,7 @@ void compute_scalar_gradients(const Mesh& mesh, const std::vector<double>& phi,
 void compute_velocity_gradients(const Mesh& mesh, const std::vector<double>& u,
                                 const std::vector<double>& v, std::vector<VelocityGradient>& grad) {
     grad.resize(mesh.nelem);
+    #pragma omp parallel for schedule(static)
     for (int ie = mesh.num_triangles(); ie < mesh.nelem; ++ie) { // quadrilaterals: area-averaged gradient
         const ElementNodes n = mesh.element_nodes(ie);
         const double* dNdx = mesh.dNkdx[ie].dNdx;
@@ -57,6 +82,7 @@ void compute_velocity_gradients(const Mesh& mesh, const std::vector<double>& u,
             g.dvdy += dNdy[a] * v[n[a]];
         }
     }
+    #pragma omp parallel for schedule(static)
     for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const auto& n = mesh.intma[ie];
         const double* dNdx = mesh.dNkdx[ie].dNdx;
@@ -74,26 +100,51 @@ void compute_velocity_gradients(const Mesh& mesh, const std::vector<double>& u,
 void project_to_nodes(const Mesh& mesh, const std::vector<double>& nodal_mass,
                       const std::vector<double>& elem_values, std::vector<double>& nodal_values) {
     nodal_values.assign(mesh.npoin, 0.0);
-    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+    auto process_tri = [&](int ie) {
         const double w = elem_values[ie] * mesh.detJ[ie] / 6.0;
         for (int k = 0; k < Mesh::nep; ++k) nodal_values[mesh.intma[ie][k]] += w;
+    };
+    if (!mesh.triangle_color_groups.empty()) {
+        for (const auto& grp : mesh.triangle_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_tri(grp[i]);
+            }
+        }
+    } else {
+        for (int ie = 0; ie < mesh.num_triangles(); ++ie) process_tri(ie);
     }
-    for (int q = 0; q < mesh.num_quads(); ++q) { // sum_e v_e int N_a dOmega
+
+    auto process_quad = [&](int q) {
         const double value = elem_values[mesh.element_of_quad(q)];
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
         for (int a = 0; a < Mesh::nep_quad; ++a)
             nodal_values[n[a]] += value * mesh.quad_geom[static_cast<std::size_t>(q)].mass[a];
+    };
+    if (!mesh.quad_color_groups.empty()) {
+        for (const auto& grp : mesh.quad_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_quad(grp[i]);
+            }
+        }
+    } else {
+        for (int q = 0; q < mesh.num_quads(); ++q) process_quad(q);
     }
+
+    #pragma omp parallel for schedule(static)
     for (int ip = 0; ip < mesh.npoin; ++ip) nodal_values[ip] /= nodal_mass[ip];
 }
 
 void element_mean(const Mesh& mesh, const std::vector<double>& nodal_values,
                   std::vector<double>& elem_values) {
     elem_values.resize(mesh.nelem);
+    #pragma omp parallel for schedule(static)
     for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const auto& n = mesh.intma[ie];
         elem_values[ie] = (nodal_values[n[0]] + nodal_values[n[1]] + nodal_values[n[2]]) / 3.0;
     }
+    #pragma omp parallel for schedule(static)
     for (int q = 0; q < mesh.num_quads(); ++q) { // value at the element centre
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
         elem_values[mesh.element_of_quad(q)] =
@@ -316,6 +367,7 @@ NodalGradient::NodalGradient(const Mesh& mesh, GradientRecovery method) : method
 void NodalGradient::gradient(const std::vector<double>& phi, std::vector<std::array<double, 2>>& grad) const {
     const int n = npoin();
     grad.resize(n);
+    #pragma omp parallel for schedule(static)
     for (int ip = 0; ip < n; ++ip) {
         double sx = 0.0, sy = 0.0;
         for (int k = offset_[ip]; k < offset_[ip + 1]; ++k) {
@@ -331,6 +383,7 @@ void NodalGradient::velocity_gradient(const std::vector<double>& u, const std::v
                                       std::vector<VelocityGradient>& grad) const {
     const int n = npoin();
     grad.resize(n);
+    #pragma omp parallel for schedule(static)
     for (int ip = 0; ip < n; ++ip) {
         VelocityGradient g;
         for (int k = offset_[ip]; k < offset_[ip + 1]; ++k) {
@@ -354,6 +407,7 @@ void FlowKinematics::compute(const Mesh& mesh, const NodalGradient& recovery,
 
     strain_elem.resize(mesh.nelem);
     vorticity_elem.resize(mesh.nelem);
+    #pragma omp parallel for schedule(static)
     for (int ie = 0; ie < mesh.nelem; ++ie) {
         strain_elem[ie] = strain_rate_magnitude(grad_elem[ie]);
         vorticity_elem[ie] = vorticity_magnitude(grad_elem[ie]);
@@ -362,6 +416,7 @@ void FlowKinematics::compute(const Mesh& mesh, const NodalGradient& recovery,
     recovery.velocity_gradient(u, v, grad_node);
     strain_node.resize(mesh.npoin);
     vorticity_node.resize(mesh.npoin);
+    #pragma omp parallel for schedule(static)
     for (int ip = 0; ip < mesh.npoin; ++ip) {
         strain_node[ip] = strain_rate_magnitude(grad_node[ip]);
         vorticity_node[ip] = vorticity_magnitude(grad_node[ip]);

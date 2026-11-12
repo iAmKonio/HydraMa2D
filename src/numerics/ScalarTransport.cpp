@@ -1,4 +1,5 @@
 #include "numerics/ScalarTransport.hpp"
+#include "numerics/OpenMP.hpp"
 
 #include <stdexcept>
 
@@ -18,7 +19,7 @@ void assemble_scalar_transport(const Mesh& mesh,
         s.rhs->assign(mesh.npoin, 0.0);
     }
 
-    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+    auto process_triangle = [&](int ie) {
         const int ipn[3] = {mesh.intma[ie][0], mesh.intma[ie][1], mesh.intma[ie][2]};
         const double lu[3] = {u[ipn[0]], u[ipn[1]], u[ipn[2]]};
         const double lv[3] = {v[ipn[0]], v[ipn[1]], v[ipn[2]]};
@@ -57,13 +58,26 @@ void assemble_scalar_transport(const Mesh& mesh,
                 rhs[ipn[in]] += lrhs;
             }
         }
+    };
+
+    if (!mesh.triangle_color_groups.empty()) {
+        for (const auto& grp : mesh.triangle_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_triangle(grp[i]);
+            }
+        }
+    } else {
+        for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+            process_triangle(ie);
+        }
     }
 
     // Bilinear quadrilaterals: the weak form of Step 1 for a scalar, 2 x 2
     // Gauss-Legendre: - int N_a u . grad phi - dt/2 int (u_c . grad N_a)(u_c . grad phi)
     //                 - int Gamma grad N_a . grad phi       (u_c: element-centre velocity)
     const auto& shape = q1::gauss_shape();
-    for (int q = 0; q < mesh.num_quads(); ++q) {
+    auto process_quad = [&](int q) {
         const int ie = mesh.element_of_quad(q);
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
         const QuadGeometry& geo = mesh.quad_geom[static_cast<std::size_t>(q)];
@@ -103,6 +117,19 @@ void assemble_scalar_transport(const Mesh& mesh,
             }
             std::vector<double>& rhs = *s.rhs;
             for (int a = 0; a < 4; ++a) rhs[n[a]] += lrhs[a];
+        }
+    };
+
+    if (!mesh.quad_color_groups.empty()) {
+        for (const auto& grp : mesh.quad_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_quad(grp[i]);
+            }
+        }
+    } else {
+        for (int q = 0; q < mesh.num_quads(); ++q) {
+            process_quad(q);
         }
     }
 }

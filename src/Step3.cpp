@@ -1,4 +1,5 @@
 #include "Step3.hpp"
+#include "numerics/OpenMP.hpp"
 
 namespace hydrama {
 
@@ -13,7 +14,7 @@ void compute_step3(const Mesh& mesh,
     rhs_u.assign(mesh.npoin, 0.0);
     rhs_v.assign(mesh.npoin, 0.0);
 
-    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+    auto process_triangle = [&](int ie) {
         int ipn[3] = {mesh.intma[ie][0], mesh.intma[ie][1], mesh.intma[ie][2]};
 
         double lu_n[3] = {u_n[ipn[0]], u_n[ipn[1]], u_n[ipn[2]]};
@@ -48,12 +49,25 @@ void compute_step3(const Mesh& mesh,
             rhs_u[ip] += lrhs_u;
             rhs_v[ip] += lrhs_v;
         }
+    };
+
+    if (!mesh.triangle_color_groups.empty()) {
+        for (const auto& grp : mesh.triangle_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_triangle(grp[i]);
+            }
+        }
+    } else {
+        for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
+            process_triangle(ie);
+        }
     }
 
     // Bilinear quadrilaterals, 2 x 2 Gauss-Legendre:
     //   - int N_a grad p^{n+1}  -  dt/2 int (u_c . grad N_a) grad p^n     u_c: element-centre velocity
     const auto& shape = q1::gauss_shape();
-    for (int q = 0; q < mesh.num_quads(); ++q) {
+    auto process_quad = [&](int q) {
         const int ie = mesh.element_of_quad(q);
         const auto& n = mesh.quads[static_cast<std::size_t>(q)];
         const QuadGeometry& geo = mesh.quad_geom[static_cast<std::size_t>(q)];
@@ -88,6 +102,19 @@ void compute_step3(const Mesh& mesh,
         for (int a = 0; a < 4; ++a) {
             rhs_u[n[a]] += lrhs_u[a];
             rhs_v[n[a]] += lrhs_v[a];
+        }
+    };
+
+    if (!mesh.quad_color_groups.empty()) {
+        for (const auto& grp : mesh.quad_color_groups) {
+            #pragma omp parallel for schedule(static)
+            for (std::size_t i = 0; i < grp.size(); ++i) {
+                process_quad(grp[i]);
+            }
+        }
+    } else {
+        for (int q = 0; q < mesh.num_quads(); ++q) {
+            process_quad(q);
         }
     }
 }
