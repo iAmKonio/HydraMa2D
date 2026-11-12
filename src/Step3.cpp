@@ -13,7 +13,7 @@ void compute_step3(const Mesh& mesh,
     rhs_u.assign(mesh.npoin, 0.0);
     rhs_v.assign(mesh.npoin, 0.0);
 
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         int ipn[3] = {mesh.intma[ie][0], mesh.intma[ie][1], mesh.intma[ie][2]};
 
         double lu_n[3] = {u_n[ipn[0]], u_n[ipn[1]], u_n[ipn[2]]};
@@ -47,6 +47,47 @@ void compute_step3(const Mesh& mesh,
             int ip = ipn[in];
             rhs_u[ip] += lrhs_u;
             rhs_v[ip] += lrhs_v;
+        }
+    }
+
+    // Bilinear quadrilaterals, 2 x 2 Gauss-Legendre:
+    //   - int N_a grad p^{n+1}  -  dt/2 int (u_c . grad N_a) grad p^n     u_c: element-centre velocity
+    const auto& shape = q1::gauss_shape();
+    for (int q = 0; q < mesh.num_quads(); ++q) {
+        const int ie = mesh.element_of_quad(q);
+        const auto& n = mesh.quads[static_cast<std::size_t>(q)];
+        const QuadGeometry& geo = mesh.quad_geom[static_cast<std::size_t>(q)];
+        double pnew[4], pold[4], uc = 0.0, vc = 0.0;
+        for (int a = 0; a < 4; ++a) {
+            pnew[a] = p_new[n[a]];
+            pold[a] = p_old[n[a]];
+            uc += 0.25 * u_n[n[a]];
+            vc += 0.25 * v_n[n[a]];
+        }
+        const double dt_half = 0.5 * delte[ie];
+        double lrhs_u[4] = {0.0, 0.0, 0.0, 0.0};
+        double lrhs_v[4] = {0.0, 0.0, 0.0, 0.0};
+        for (int g = 0; g < q1::kGaussPoints; ++g) {
+            const double W = geo.weight[g];
+            const auto& N = shape[g];
+            const auto& dNdx = geo.dNdx[g];
+            const auto& dNdy = geo.dNdy[g];
+            double px = 0.0, py = 0.0, pox = 0.0, poy = 0.0;
+            for (int a = 0; a < 4; ++a) {
+                px += dNdx[a] * pnew[a];
+                py += dNdy[a] * pnew[a];
+                pox += dNdx[a] * pold[a];
+                poy += dNdy[a] * pold[a];
+            }
+            for (int a = 0; a < 4; ++a) {
+                const double adv = dNdx[a] * uc + dNdy[a] * vc;
+                lrhs_u[a] -= W * (N[a] * px + dt_half * adv * pox);
+                lrhs_v[a] -= W * (N[a] * py + dt_half * adv * poy);
+            }
+        }
+        for (int a = 0; a < 4; ++a) {
+            rhs_u[n[a]] += lrhs_u[a];
+            rhs_v[n[a]] += lrhs_v[a];
         }
     }
 }

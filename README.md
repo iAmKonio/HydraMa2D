@@ -1,6 +1,6 @@
 # HydraMa 2D (C++)
 
-**HydraMa 2D** is an unstructured finite element CFD solver for 2D incompressible fluid flows. It uses the **Characteristic-Based Split (CBS)** scheme on linear 3-node triangular meshes ($P_1 - P_1$).
+**HydraMa 2D** is an unstructured finite element CFD solver for 2D incompressible fluid flows. It uses the **Characteristic-Based Split (CBS)** scheme with equal-order interpolation of velocity and pressure on linear 3-node triangles ($P_1 - P_1$), bilinear 4-node quadrilaterals ($Q_1 - Q_1$) or mixed (hybrid) meshes of both, read from Gmsh, SU2 or CGNS files or the legacy HydraMa format.
 
 ---
 
@@ -12,8 +12,19 @@
   - **Step 3:** Explicit velocity correction with pressure gradient and CBS pressure stabilization.
 - **Element-By-Element (EBE) PCG Solver:** Matrix-free Jacobi Preconditioned Conjugate Gradient solver requiring only $O(N_{\text{elem}} + N_{\text{poin}})$ memory with no global sparse matrix assembly.
 - **Extensible linear solver layer (`hydrama::linalg`):** CG, BiCGSTAB and restarted GMRES(m); matrix-free (EBE) or assembled (CSR) operators; Jacobi / SSOR / IC(0) / ILU(0) preconditioners with reverse Cuthill-McKee reordering, all selectable in `<case>.solver` (see [Linear Solver Architecture](#linear-solver-architecture)).
+- **Triangles, quadrilaterals and hybrid meshes:** bilinear quadrilaterals integrated with 2×2 Gauss–Legendre quadrature are supported by every CBS step, the pressure solvers, the turbulence models and the VTK output, so prism-like inflation layers of quadrilaterals can be combined with a triangular core mesh. Triangle-only meshes give bit-identical results to before. See [docs/QUADRILATERAL_ELEMENTS.md](docs/QUADRILATERAL_ELEMENTS.md).
+- **Mesh quality report:** every run (and `HydraMa2D --check-mesh <case>`) prints the corner angles, aspect ratio, equiangle skewness and scaled Jacobian per element type, the skewness classes and the worst element; badly skewed elements give a warning.
+- **Forces and probes:** drag / lift coefficients (volume and surface forms) and point values written during the run (`system/<case>.monitors`); validated on the Schäfer–Turek cylinder benchmark, see [docs/CYLINDER_BENCHMARK.md](docs/CYLINDER_BENCHMARK.md).
 - **Adaptive Timestepping:** Automatic computation of local and global time steps constrained by convective CFL and diffusive stability limits.
 - **Case Structure:** OpenFOAM-style directory structure (`constant/`, `system/`, `results/`).
+- **Native Gmsh, SU2 and CGNS mesh input:**
+  - Gmsh MSH 2.2 and 4.1 (ASCII and binary) read directly from `constant/<case>.msh`, SU2 native meshes from `constant/<case>.su2`, and CGNS files (HDF5 or ADF) from `constant/<case>.cgns`; the external converter is no longer needed.
+  - CGNS is optional: it is used if the CGNS library is found when building.
+  - Physical group / marker / BC names become boundary conditions (`wall`, `inlet`, `parabolic_inlet`, `outlet`, `symmetry`, ...); CGNS BCTypes are taken into account.
+  - Node tags are remapped, clockwise triangles and quadrilaterals reoriented (strictly positive Jacobians; non-convex or degenerate quadrilaterals are rejected), and boundary sides matched to their elements.
+  - Every problem is reported with the group, element and node concerned.
+
+  See [docs/MESH_IMPORT.md](docs/MESH_IMPORT.md) and [docs/BOUNDARY_NAMING.md](docs/BOUNDARY_NAMING.md). Legacy `*.mesh` cases work unchanged.
 - **RANS Turbulence Modelling (optional):** Spalart–Allmaras (negative-SA), Menter k-ω SST, standard k-ε with log-law wall functions and Launder–Sharma low-Re k-ε, enabled by `system/<case>.turbulence` (see [Turbulence Modelling](#turbulence-modelling) and `docs/TURBULENCE_DESIGN.md`).
 - **Standard Outputs:**
   - ASCII VTK unstructured grids (`results/<case>_<time>.vtk`) for visualization in ParaView; turbulent runs add the turbulence fields, the wall distance and y+.
@@ -26,22 +37,40 @@
 ```
 HydraMa.dev/
 ├── CMakeLists.txt                # CMake build configuration
+├── cmake/FindCGNS.cmake          # Optional CGNS (+ HDF5) dependency
 ├── Makefile                      # Make build configuration
 ├── README.md                     # Documentation
 ├── docs/
+│   ├── BOUNDARY_NAMING.md           # Boundary names -> boundary conditions (all keywords and aliases)
+│   ├── CYLINDER_BENCHMARK.md        # Schafer-Turek benchmark: triangle vs. inflation-layer meshes, forces
 │   ├── LINEAR_SOLVER_REFERENCES.md  # Literature behind the linear solver algorithms
+│   ├── MESH_IMPORT.md               # Gmsh / SU2 / CGNS input: formats, building with CGNS, pipeline, guarantees
+│   ├── QUADRILATERAL_ELEMENTS.md     # Bilinear quadrilaterals: quadrature, metrics, CBS terms, verification, sources
 │   ├── REVIEWER_GUIDE.md            # Build, test, sanitizer and benchmark instructions
 │   └── TURBULENCE_DESIGN.md         # RANS turbulence modelling design specification
 ├── tools/
-│   └── benchmark.sh              # Reproducible benchmark of the solver configurations
+│   ├── benchmark.sh              # Reproducible benchmark of the solver configurations
+│   ├── check_bit_identity.sh     # Bit-for-bit comparison with a baseline commit (legacy case, 13 configurations)
+│   └── cylinder_benchmark/       # Schafer-Turek benchmark: mesh generator (Gmsh), driver, analysis
 ├── include/                      # C++ Header files
 │   ├── BoundaryConditions.hpp
 │   ├── BoundaryKind.hpp          # Flag code -> wall / inlet / outlet / symmetry
+│   ├── CaseMeshCheck.hpp         # HydraMa2D --check-mesh
 │   ├── Config.hpp
 │   ├── IO.hpp
 │   ├── LinearSolver.hpp          # EBE assembly/mat-vec, legacy solve_pcg() adapter, time step
 │   ├── Mesh.hpp
 │   ├── PressureSolver.hpp        # Facade: pressure Poisson solve used by the time loop
+│   ├── mesh/                     # Mesh import (namespace hydrama::mesh)
+│   │   ├── BoundaryNaming.hpp    # Boundary types, keywords / aliases, name resolution
+│   │   ├── CgnsModel.hpp         # CGNS structure that is read (library independent)
+│   │   ├── CgnsReader.hpp        # CGNS file -> CgnsFile -> MeshData (optional library)
+│   │   ├── GmshReader.hpp        # Gmsh MSH 2.2 / 4.1, ASCII / binary -> MeshData
+│   │   ├── MeshBuilder.hpp       # MeshData -> validated Mesh (remap, orient, boundary sides, BCs)
+│   │   ├── MeshCheck.hpp         # Independent check of the solver's mesh invariants
+│   │   ├── MeshData.hpp          # Format-neutral mesh as read from a file
+│   │   ├── MeshQuality.hpp       # Element quality metrics and the run-log report
+│   │   └── Su2Reader.hpp         # SU2 native mesh (ASCII) -> MeshData
 │   ├── geometry/                 # Wall geometry, wall distance, field operations
 │   │   ├── FieldOps.hpp          # Gradients, S, Omega, projection, PPR gradient recovery
 │   │   ├── SegmentTree.hpp       # AABB tree, exact nearest-segment queries
@@ -50,7 +79,13 @@ HydraMa.dev/
 │   ├── numerics/                 # Shared transport numerics
 │   │   ├── DirichletSet.hpp      # Compiled Dirichlet conditions
 │   │   ├── PointImplicit.hpp     # Point-implicit / Patankar source update
+│   │   ├── Quadrature.hpp        # Gauss-Legendre rules (1D, tensor product on the square)
+│   │   ├── QuadElement.hpp       # Bilinear Q1 element: shape functions, Jacobian, geometry, Laplacian
 │   │   └── ScalarTransport.hpp   # Fused CBS scalar transport kernel
+│   ├── post/                     # Post-processing during the run (namespace hydrama::post)
+│   │   ├── Forces.hpp            # Body forces: surface traction and volume (reaction) form
+│   │   ├── Monitors.hpp          # system/<case>.monitors: forces and probes -> results/<case>.monitors.dat
+│   │   └── Probes.hpp            # Point location and interpolation (triangles, quadrilaterals)
 │   ├── turbulence/               # RANS turbulence models
 │   │   ├── KEpsilon.hpp          # k-epsilon family (standard + wall functions, Launder-Sharma)
 │   │   ├── KOmegaSST.hpp         # Menter k-omega SST (ln omega)
@@ -102,7 +137,9 @@ HydraMa.dev/
 │   ├── Mesh.cpp
 │   ├── PressureSolver.cpp
 │   ├── geometry/
+│   ├── mesh/                     # Implementations of include/mesh/*
 │   ├── numerics/
+│   ├── post/
 │   ├── turbulence/
 │   ├── linalg/                   # Implementations of include/linalg/*
 │   ├── Solver.cpp
@@ -113,10 +150,40 @@ HydraMa.dev/
 ├── tests/                        # Catch2 unit tests (CMake/CTest only)
 │   ├── CMakeLists.txt
 │   ├── MeshTestUtils.hpp         # Test mesh builders (triangles, structured grids)
+│   ├── QuadTestUtils.hpp         # Quadrilateral / hybrid test meshes (grids, inflation layers, patch meshes, holes)
+│   ├── MeshCaseTestUtils.hpp     # Solver runs on a Gmsh mesh file (extra system files, restarts)
 │   ├── LinearSolverTestUtils.hpp # Dense-matrix helpers (reference assembly, direct solve)
 │   ├── LinalgTestUtils.hpp       # Test doubles for the linalg interfaces (dense/counting operators, ...)
 │   ├── reference/LegacyPcg.hpp   # Frozen copy of the original PCG (bit-for-bit reference)
 │   ├── IoTestUtils.hpp           # Temp dirs, stdout capture, case copy, VTK parser
+│   ├── GmshTestWriter.hpp        # Gmsh MSH writer for tests (all variants, byte order, CRLF, ...)
+│   ├── Su2TestWriter.hpp         # SU2 writer for tests (optional indices, section order, legacy parts, ...)
+│   ├── CgnsTestModels.hpp        # CGNS structures for tests (channel layouts, benchmark mesh)
+│   ├── CgnsTestWriter.hpp        # CGNS writer for tests (HDF5 / ADF; builds with CGNS)
+│   ├── data/gmsh/                # Meshes written by Gmsh itself + generate_fixtures.py
+│   ├── data/su2/                 # Synthetic / malformed / Gmsh-exported SU2 meshes + generate_fixtures.py
+│   ├── data/cgns/                # Synthetic (CGNS 3.4) / rejected / Gmsh-exported CGNS meshes + generators
+│   ├── test_boundary_naming.cpp
+│   ├── test_gmsh_reader.cpp
+│   ├── test_gmsh_fixtures.cpp
+│   ├── test_mesh_builder.cpp
+│   ├── test_mesh_import_regression.cpp # Gmsh cases vs. legacy case, bit for bit
+│   ├── test_su2_reader.cpp
+│   ├── test_su2_import.cpp       # SU2 fixtures, SU2 cases vs. legacy case
+│   ├── test_cgns_translate.cpp   # CGNS structure -> mesh (no library needed)
+│   ├── test_cgns_reader.cpp      # CGNS files, fixtures, CGNS cases vs. legacy case
+│   ├── test_quadrature.cpp       # Gauss-Legendre rules
+│   ├── test_quad_element.cpp     # Bilinear element: shape functions, Jacobians, geometry, Laplacian
+│   ├── test_quad_mesh.cpp        # Quadrilateral / hybrid Mesh quantities and import
+│   ├── test_quad_patch.cpp       # Patch tests (also irregular meshes) and convergence orders
+│   ├── test_quad_solver.cpp      # Solver runs on quadrilateral and hybrid meshes
+│   ├── test_parabolic_inlet.cpp  # Fully developed inflow (508)
+│   ├── test_forces.cpp           # Body forces against closed-form values
+│   ├── test_probes.cpp           # Point location and interpolation
+│   ├── test_monitors.cpp         # *.monitors parser, data file, solver integration
+│   ├── test_mesh_quality.cpp     # Quality metrics and report
+│   ├── test_cylinder_benchmark.cpp # Schafer-Turek 2D-1 / 2D-2 on the level-0 meshes
+│   ├── test_case_mesh_check.cpp  # HydraMa2D --check-mesh
 │   ├── test_mesh_area.cpp
 │   ├── test_mesh_shape_functions.cpp
 │   ├── test_mesh_mass_matrix.cpp
@@ -153,7 +220,7 @@ HydraMa.dev/
 │   └── test_pressure_solver.cpp
 └── Hinterkante.dev.Re100/        # Example benchmark case (Backward-facing step, Re=200)
     ├── constant/
-    │   ├── hinterkante.mesh      # Mesh topology & coordinates
+    │   ├── hinterkante.mesh      # Mesh topology & coordinates (legacy format; or .msh / .su2 / .cgns)
     │   └── hinterkante.bofl      # Boundary flag mapping table
     ├── system/
     │   ├── hinterkante.control   # Timestepping, iterations, tolerances
@@ -187,6 +254,18 @@ mkdir build && cd build
 cmake ..
 make
 ```
+
+**Optional CGNS mesh input.** If the CGNS library (≥ 3.3, with HDF5) is found, CMake enables `.cgns` meshes; otherwise HydraMa2D is built without them.
+
+| Option | Meaning |
+| :--- | :--- |
+| `-DHYDRAMA2D_WITH_CGNS=AUTO` (default) | use CGNS if found |
+| `-DHYDRAMA2D_WITH_CGNS=ON` | require it |
+| `-DHYDRAMA2D_WITH_CGNS=OFF` | disable it |
+| `-DCGNS_ROOT=<prefix>` | location of a custom installation |
+| `-DCGNS_USE_STATIC_LIBS=ON` | prefer a static libcgns |
+
+The `make` build enables CGNS with `make CGNS=1 [CGNS_PREFIX=<prefix>]`. See [docs/MESH_IMPORT.md](docs/MESH_IMPORT.md#4-cgns-optional).
 
 The CMake build is split into two targets:
 
@@ -282,6 +361,20 @@ ctest --test-dir build -R "[Nn]ormal"        # run tests whose name matches a (c
 | `[linalg][nonsymmetric]` | BiCGSTAB, GMRES | error vs. direct solution as the tolerance tightens; convergence rates ILU(0) < Jacobi < 1; ILU(0) for strong convection; CG / BiCGSTAB / GMRES agree on an SPD system |
 | `[solver_options]` | `IO::read_solver`, `pressure_criteria` | optional `key = value` settings, comments/free text, every invalid input, derived criteria |
 | `[pressure_solver]` | `PressureSolver` | bit-for-bit equal to the original PCG over multi-step sequences (global and local dt), legacy configuration, binding/re-binding, monitor; all configurations converge to the same pressure, composition, pattern/ordering built once per mesh |
+| `[boundary_naming]` | `resolve_boundary_name`, boundary type table | every keyword and alias, normalisation (case, separators, camelCase, digits), whole-token and longest matches, family precedence, ambiguity, legacy codes, uniqueness, docs table = code table |
+| `[gmsh]` | `read_gmsh`, `parse_gmsh` | MSH 2.2 / 4.1 ASCII / binary give identical data, foreign byte order, 4-byte `size_t`, CRLF, 64-bit tags, unknown sections, parametric nodes, every invalid input, truncation and corruption sweeps; `[fixtures]`: files written by Gmsh itself |
+| `[su2]` | `read_su2`, `parse_su2`, `IO::read_su2_mesh` | the specification example, optional indices / section order / comments / CRLF / NZONE / NPERIODIC / FFD, every malformed header, count, element, point and marker (with line numbers), truncation and corruption sweeps; fixtures: regular channel, orientation repair, marker extraction, `*.bofl` by marker number, malformed files, Gmsh-exported SU2 = Gmsh mesh; benchmark mesh and solver bit-identical to the legacy case |
+| `[cgns]` | `cgns_to_mesh_data`, `read_cgns_file`, `IO::read_cgns_mesh` | `[translate]` (every build, no library): element and BCType tables, every section / MIXED / point-set / location / family layout equals the SU2 channel, name + BCType combination, every unsupported element type and invalid structure. `[file]` (builds with CGNS, skipped otherwise): `cg_npe`, HDF5 / ADF round trips, fixtures, Gmsh exports, file-type detection, benchmark mesh and solver bit-identical to the legacy case. Without CGNS: the "built without CGNS support" path |
+| `[quadrature]` | `gauss_legendre`, `gauss_legendre_square` | tabulated nodes and weights, exactness for polynomials up to degree 2n−1 (and not 2n), symmetry, weight sums, high orders, invalid orders |
+| `[quad]` | `q1::*`, `Mesh` with quadrilaterals, `MeshBuilder`, CBS steps, `Solver` | partition of unity and Kronecker property of the shape functions, Jacobians / areas / gradients of affine and distorted elements, orientation repair and rejection of non-convex / degenerate elements, Mesh quantities (mass, Laplacian, sizes, normals, wall geometry) of quadrilateral and hybrid meshes vs. independent references, patch tests on regular and irregular (valence ≠ 4) meshes, second-order convergence of the Laplacian, Poiseuille flow on quadrilateral / hybrid / inflation-layer meshes, Gmsh / SU2 / CGNS quadrilateral fixtures, every turbulence model on a hybrid mesh, determinism |
+| `[inlet_parabolic]` | `parabolic_inlet_velocities`, `apply_velocity_bcs` | Poiseuille profile (mean 1, peak 1.5) along the inward normal for any side order and rotated meshes, separate segments, closed / branching / zero-length inlets, condition order 507 → 503 → 508 → walls, a channel that stays fully developed (inflow flux, symmetry) |
+| `[post][forces]` | `surface_force`, `volume_force` | Couette flow exact with both forms on distorted triangle / quadrilateral / hybrid meshes, volume-form identities on a closed body (linear pressure, du/dt, convection vs. an independent 3 × 3 Gauss rule), first-order surface form for Poiseuille flow, rotation invariance, side orientation, validation |
+| `[post][probes]` | `locate_point`, `interpolate` | exact for linear fields (and bilinear fields on parallelograms), nodes, edges, boundary, holes, points outside |
+| `[post][monitors]` | `*.monitors` parser, `Monitors`, `Solver` | every key and error (with line numbers), bodies by name / tag / side id incl. sides in two groups, probes, data file format, results bit-identical with and without monitors, restart appends, solver errors |
+| `[mesh_quality]` | `element_quality`, `assess_mesh_quality`, `format_quality_report` | angles, aspect ratio, skewness and scaled Jacobian of ideal, right, sliver, degenerate, clockwise, rectangular, rhombic, trapezoidal and non-convex elements vs. hand values; invariance; report and warning |
+| `[benchmark][cylinder]` | `Solver` on the Schäfer–Turek level-0 meshes | 2D-1 (Re = 20) converged c_D, c_L, Δp on the triangle and inflation-layer meshes (pinned, within 10 % of the reference), 2D-2 (Re = 100) periodic shedding (Strouhal number, c_L / c_D maxima) |
+| `[check_mesh]` | `check_case_mesh`, `IO::read_case_mesh` | legacy and Gmsh cases, missing mesh, closed parabolic inlet, clockwise legacy triangle |
+| `[mesh_import]` | `build_mesh`, `check_mesh`, `IO::read_gmsh_mesh`, `IO::locate_mesh_file` | tag remapping, reorientation, boundary matching and outward normals (also around holes), duplicates, interior lines, `*.bofl` precedence, unimplemented types, boundary groups (`Mesh::boundary_groups`), every invalid mesh; benchmark mesh through all Gmsh variants bit-identical, solver bit-identical to the legacy case |
 | `[solver]` | `Solver` | 10-step benchmark runs: finite, bounded, converged PCG, BCs, determinism, reference values, bit-for-bit restart, steady mode; every linear solver configuration reproduces the converged reference values (`[configurations]`) |
 
 The `[solver][regression]` tests compare against reference values recorded on Linux/x86-64 (GCC). Values from the bundled configuration are checked with a platform-robust tolerance (1e-3, velocity and time only), because its loose PCG tolerance makes the pressure sensitive to round-off differences between compilers/CPUs (~1 %). A variant with a converged PCG is checked tightly (1e-7). If a deliberate change to the numerics alters these values, update the reference values in `tests/test_solver_regression.cpp`.
@@ -427,6 +520,34 @@ cd Hinterkante.dev.Re100
 ./HydraMa2D Hinterkante.dev.Re100
 ```
 
+### With a Gmsh, SU2 or CGNS mesh
+Put the mesh in `constant/<case>.msh` (Gmsh), `constant/<case>.su2` (SU2) or `constant/<case>.cgns` (CGNS) instead of `<case>.mesh`, and name every boundary curve / marker / BC after its type (`MARKER_TAG= inlet` in SU2; in CGNS the BCType counts too):
+
+```
+Physical Curve("inlet") = {4};   Physical Curve("outlet") = {2};
+Physical Curve("wall")  = {1, 3, 5};
+```
+
+No `.bofl` file is needed; an optional `constant/<case>.bofl` (physical tag, SU2 marker number or CGNS BC number → flag code) overrides names. See [docs/MESH_IMPORT.md](docs/MESH_IMPORT.md).
+
+```bash
+./HydraMa2D --boundary-names     # list every boundary keyword and alias
+./HydraMa2D --check-mesh <case>  # import and check the mesh only: invariants, conditions, quality
+```
+
+### Forces and probes
+An optional `system/<case>.monitors` file makes the solver write `results/<case>.monitors.dat`: drag and lift coefficients of a body (boundary groups by name or tag) and the velocity and pressure at probe points, every `interval` steps and at the last step. Without the file nothing changes.
+
+```
+body                cylinder_wall   # boundary groups (names or tags)
+reference_velocity  1.0             # C = F / (0.5 U_ref^2 L_ref)
+reference_length    1.0
+interval            5
+probe  front  1.5  2.0              # name x y
+```
+
+The coefficients are computed in the volume ("reaction") form and from the surface traction, see [docs/CYLINDER_BENCHMARK.md](docs/CYLINDER_BENCHMARK.md), which also validates the solver on the Schäfer–Turek cylinder benchmark with triangle and inflation-layer meshes.
+
 ---
 
 ## Boundary Flag Codes
@@ -440,12 +561,29 @@ cd Hinterkante.dev.Re100
 | **504** | Pressure outlet ($p = 0.0$) |
 | **506** | Velocity symmetry / slip boundary ($\vec{u} \cdot \vec{n} = 0$) |
 | **507** | Backward Facing Step polynomial inflow profile ($v = 0.0$) |
+| **508** | Fully developed (parabolic, Poiseuille) inflow along the inward normal: mean velocity 1 over each connected inlet segment, 1.5 at its centre |
 
-New code classifies these codes through `classify_boundary_flag()` (`include/BoundaryKind.hpp`): 500/501/502 → wall, 503/507 → inlet, 504 → outlet, 506 → symmetry, anything else → unknown.
+New code classifies these codes through `classify_boundary_flag()` (`include/BoundaryKind.hpp`): 500/501/502 → wall, 503/507/508 → inlet, 504 → outlet, 506 → symmetry, anything else → unknown.
+
+In Gmsh, SU2 and CGNS meshes the codes come from the **physical group / marker / BC names** (and the CGNS BCType):
+
+| Name | Code |
+| :--- | :---: |
+| `wall` | 500 |
+| `wall_hot` | 501 |
+| `wall_cold` | 502 |
+| `inlet` | 503 |
+| `outlet` | 504 |
+| `symmetry` | 506 |
+| `inlet_profile` | 507 |
+| `inlet_parabolic` (`parabolic_inlet`, `poiseuille_inlet`) | 508 |
+
+Aliases such as `no_slip`, `velocity_inlet`, `pressure_outlet` and `symmetryPlane` work too, and the keyword may appear anywhere in the name (`bottom_wall`, `Inlet-2`).
+
+Names of types the solver does not implement yet (`periodic`, `rotating`, `moving_wall`, `farfield`, `pressure_inlet`, ...) are recognised and rejected with a clear message. The complete list and the matching rules are in [docs/BOUNDARY_NAMING.md](docs/BOUNDARY_NAMING.md).
 
 ---
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-

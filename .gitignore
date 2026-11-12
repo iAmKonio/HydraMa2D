@@ -7,11 +7,18 @@
 *.a
 *.so
 *.dylib
-HydraMa2D
-HydraMa2D.exe
-HydraMa2D_cpp
+# Executables in the repository root only (anchored, so that directories
+# called HydraMa2D elsewhere are never silently ignored)
+/HydraMa2D
+/HydraMa2D.exe
+/HydraMa2D_cpp
 build/
+build-*/
 bin/
+
+# Python bytecode (tools/cylinder_benchmark, fixture generators)
+__pycache__/
+*.pyc
 
 # Temporary and swap files
 *.swp
@@ -24,4 +31,5 @@ fort.*
 **/results/*.vtk
 **/results/*.var
 **/results/*.turb.var
+**/results/*.monitors.dat
 !**/results/.gitkeep

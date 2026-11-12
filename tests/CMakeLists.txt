@@ -78,16 +78,70 @@ add_executable(hydrama2d_tests
     test_solver_turbulence.cpp
     test_k_omega_sst.cpp
     test_k_epsilon.cpp
+    test_boundary_naming.cpp
+    test_gmsh_reader.cpp
+    test_mesh_builder.cpp
+    test_gmsh_fixtures.cpp
+    test_mesh_import_regression.cpp
+    test_su2_reader.cpp
+    test_su2_import.cpp
+    test_cgns_translate.cpp
+    test_cgns_reader.cpp
+    test_quadrature.cpp
+    test_quad_element.cpp
+    test_quad_mesh.cpp
+    test_quad_patch.cpp
+    test_quad_solver.cpp
+    test_parabolic_inlet.cpp
+    test_forces.cpp
+    test_probes.cpp
+    test_monitors.cpp
+    test_mesh_quality.cpp
+    test_cylinder_benchmark.cpp
+    test_case_mesh_check.cpp
 )
 target_link_libraries(hydrama2d_tests PRIVATE hydrama2d_core Catch2::Catch2WithMain)
 target_compile_options(hydrama2d_tests PRIVATE ${HYDRAMA2D_COMPILE_OPTIONS})
 
-# Location of the bundled benchmark case, used by the real-mesh tests.
+# Location of the bundled benchmark case (real-mesh tests), of the source tree
+# (documentation checks) and of the test data (Gmsh fixtures).
 target_compile_definitions(hydrama2d_tests PRIVATE
     HYDRAMA2D_CASE_DIR="${PROJECT_SOURCE_DIR}/Hinterkante.dev.Re100"
+    HYDRAMA2D_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    HYDRAMA2D_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data"
 )
+
+# CGNS: the file-based CGNS tests write meshes with the CGNS library
+# (tests/CgnsTestWriter.hpp). Without CGNS they check the "not available"
+# path and skip the file tests.
+set(_hydrama2d_test_dl_paths "")
+if(HYDRAMA2D_HAVE_CGNS)
+    target_link_libraries(hydrama2d_tests PRIVATE HydraMa2D::CGNS)
+    target_compile_definitions(hydrama2d_tests PRIVATE HYDRAMA2D_HAVE_CGNS=1)
+    # A CGNS installation outside the system paths: the dynamic loader must
+    # find libcgns and its HDF5 both for the test discovery and for the tests.
+    if(CGNS_RUNTIME_DIRS)
+        if(CMAKE_VERSION VERSION_LESS 3.22)
+            message(WARNING "CGNS is installed in ${CGNS_RUNTIME_DIRS}: add it to the library search path "
+                            "(e.g. LD_LIBRARY_PATH) before building and running the tests (CMake < 3.22)")
+        else()
+            set(_hydrama2d_test_dl_paths DL_PATHS ${CGNS_RUNTIME_DIRS})
+        endif()
+    endif()
+
+    # Regenerates tests/data/cgns/*.cgns (not built by default):
+    #   cmake --build build --target hydrama2d_cgns_fixtures
+    #   cd tests/data/cgns && ../../../build/tests/hydrama2d_cgns_fixtures
+    add_executable(hydrama2d_cgns_fixtures EXCLUDE_FROM_ALL data/cgns/generate_fixtures.cpp)
+    target_include_directories(hydrama2d_cgns_fixtures PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(hydrama2d_cgns_fixtures PRIVATE hydrama2d_core HydraMa2D::CGNS)
+    target_compile_definitions(hydrama2d_cgns_fixtures PRIVATE HYDRAMA2D_HAVE_CGNS=1)
+    target_compile_options(hydrama2d_cgns_fixtures PRIVATE ${HYDRAMA2D_COMPILE_OPTIONS})
+endif()
 
 # Register every TEST_CASE as an individual CTest test. The timeout turns a
 # hanging test (e.g. a solver that no longer converges) into a failure; the
 # slowest test takes ~1 s, so 120 s leaves ample room for sanitizer builds.
-catch_discover_tests(hydrama2d_tests PROPERTIES TIMEOUT 120)
+# SKIP_RETURN_CODE: a Catch2 SKIP() (exit code 4, e.g. the CGNS file tests of
+# a build without CGNS) is reported as skipped, not as failed.
+catch_discover_tests(hydrama2d_tests PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 4 ${_hydrama2d_test_dl_paths})

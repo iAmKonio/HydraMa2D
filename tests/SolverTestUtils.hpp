@@ -17,7 +17,8 @@
 #include <cmath>
 #include <functional>
 #include <memory>
-#include <regex>
+#include <cctype>
+#include <sstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ namespace hydrama::test {
 
 // Non-empty line indices of the *.control / *.solver value lines.
 inline constexpr int kRestartOpt = 2, kNtime = 5, kTransient = 8, kWriteOutput = 17, kDtfixed = 23, kIwrite = 29;
+inline constexpr int kVelCheck = 38, kL2Norm = 41; // non-empty line indices of *.control
 inline constexpr int kRelToler = 6, kAbsToler = 9;
 
 inline constexpr double kInflowSpeed = 1.0;
@@ -91,37 +93,61 @@ inline void prepare_case(const fs::path& dir, const CaseOptions& o) {
 // Optional turbulence model injected into the solver before initialize().
 using ModelFactory = std::function<std::unique_ptr<TurbulenceModel>()>;
 
+// Parses the per-step log lines of Solver::run (plain string parsing; std::regex
+// triggers -Wmaybe-uninitialized false positives inside libstdc++ in GCC
+// sanitizer builds):
+//   transient: "<step> pInitial: <r> pFinal: <r> Iter: <n> IterCumulative: <n>"
+//              followed by " Time: <t>"
+//   steady:    " Time = <step>" followed by "... Initial residual = <r> Final residual = <r> Iter: <n>"
 inline std::vector<StepLog> parse_log(const std::string& log) {
-    static const std::regex transient(R"(^\s*(\d+) pInitial:\s*(\S+) pFinal:\s*(\S+) Iter:\s*(\d+) IterCumulative:\s*(\d+))");
-    static const std::regex steady_step(R"(^ Time = (\d+))");
-    static const std::regex steady_pcg(R"(Initial residual = (\S+) Final residual = (\S+) Iter: (\d+))");
-    static const std::regex time_line(R"(^ Time: (\S+))");
+    auto starts_with = [](const std::string& s, const std::string& prefix) { return s.rfind(prefix, 0) == 0; };
     std::vector<StepLog> steps;
     int steady_current = -1;
     for (const auto& line : split_lines(log)) {
-        std::smatch m;
-        if (std::regex_search(line, m, transient)) {
+        std::istringstream in(line);
+        std::string a, b, c, d, e, f, g, h, i;
+        if (in >> a >> b >> c >> d >> e >> f >> g >> h >> i && b == "pInitial:" && d == "pFinal:" && f == "Iter:" &&
+            h == "IterCumulative:") {
             StepLog s;
-            s.step = std::stoi(m[1]);
-            s.initial = std::stod(m[2]);
-            s.final = std::stod(m[3]);
-            s.iterations = std::stoi(m[4]);
-            s.cumulative = std::stoi(m[5]);
+            s.step = std::stoi(a);
+            s.initial = std::stod(c);
+            s.final = std::stod(e);
+            s.iterations = std::stoi(g);
+            s.cumulative = std::stoi(i);
             steps.push_back(s);
-        } else if (std::regex_search(line, m, time_line) && !steps.empty()) {
-            steps.back().time = std::stod(m[1]);
-        } else if (std::regex_search(line, m, steady_step)) {
-            steady_current = std::stoi(m[1]);
-        } else if (std::regex_search(line, m, steady_pcg)) {
+        } else if (starts_with(line, " Time: ") && !steps.empty()) {
+            steps.back().time = std::stod(line.substr(7));
+        } else if (starts_with(line, " Time = ")) {
+            steady_current = std::stoi(line.substr(8));
+        } else if (const auto at = line.find("Initial residual = "); at != std::string::npos) {
+            std::istringstream rest(line.substr(at));
+            std::string w1, w2, eq1, initial, w3, w4, eq2, final, iter, n;
+            rest >> w1 >> w2 >> eq1 >> initial >> w3 >> w4 >> eq2 >> final >> iter >> n;
             StepLog s;
             s.step = steady_current;
-            s.initial = std::stod(m[1]);
-            s.final = std::stod(m[2]);
-            s.iterations = std::stoi(m[3]);
+            s.initial = std::stod(initial);
+            s.final = std::stod(final);
+            s.iterations = std::stoi(n);
             steps.push_back(s);
         }
     }
     return steps;
+}
+
+// True if the text contains "nan" or "inf" (any case) as a word of its own,
+// i.e. not inside a longer word such as "info".
+inline bool contains_non_finite_token(const std::string& text) {
+    std::string lower(text);
+    for (char& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    auto letter = [&lower](std::size_t k) { return std::isalpha(static_cast<unsigned char>(lower[k])) != 0; };
+    for (const std::string word : {"nan", "inf"}) {
+        for (std::size_t at = lower.find(word); at != std::string::npos; at = lower.find(word, at + 1)) {
+            const bool before = at > 0 && letter(at - 1);
+            const bool after = at + word.size() < lower.size() && letter(at + word.size());
+            if (!before && !after) return true;
+        }
+    }
+    return false;
 }
 
 inline Run run_solver(const fs::path& dir, const ModelFactory& inject = {}) {
@@ -208,8 +234,7 @@ inline void check_healthy_run(const Run& r, int steps, double rel_tol, double ab
     CHECK(max_abs(r.u) <= 5.0 * kInflowSpeed);
     CHECK(max_abs(r.v) <= 5.0 * kInflowSpeed);
     CHECK(max_abs(r.p) <= 10.0 * kInflowSpeed * kInflowSpeed);
-    static const std::regex non_finite_token(R"((^|[^A-Za-z])-?(nan|inf)([^A-Za-z]|$))", std::regex::icase);
-    CHECK_FALSE(std::regex_search(r.log, non_finite_token));
+    CHECK_FALSE(contains_non_finite_token(r.log));
 
     // One converged pressure solve per step.
     REQUIRE(static_cast<int>(r.steps.size()) == steps);

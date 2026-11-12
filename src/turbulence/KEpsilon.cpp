@@ -83,7 +83,8 @@ void KEpsilon<Variant, Damping>::initialize_fields(const TurbulenceContext& ctx)
         // (contains a wall node; its velocity gradient sees the no-slip value),
         // associated with the wall faces of those wall nodes.
         std::vector<std::vector<int>> faces_of(ctx.mesh.npoin);
-        for (const auto& e : ctx.mesh.intma) {
+        for (int ie = 0; ie < ctx.mesh.nelem; ++ie) {
+            const ElementNodes e = ctx.mesh.element_nodes(ie);
             for (int wn : e) {
                 const int iw = w.wall_index(wn);
                 if (iw < 0) continue;

@@ -12,11 +12,12 @@ std::vector<double> wall_friction_velocity(const Mesh& mesh, const WallGeometry&
     std::vector<double> u_tau(walls.num_faces(), 0.0);
     for (int f = 0; f < walls.num_faces(); ++f) {
         const WallFace& face = walls.face(f);
-        const auto& n = mesh.intma[face.elem];
+        // Element gradient: constant (triangles) or area-averaged (quadrilaterals).
+        const ElementNodes n = mesh.element_nodes(face.elem);
         const double* dNdx = mesh.dNkdx[face.elem].dNdx;
         const double* dNdy = mesh.dNkdx[face.elem].dNdy;
         double dudx = 0.0, dudy = 0.0, dvdx = 0.0, dvdy = 0.0;
-        for (int k = 0; k < Mesh::nep; ++k) {
+        for (int k = 0; k < n.size(); ++k) {
             dudx += dNdx[k] * u[n[k]];
             dudy += dNdy[k] * u[n[k]];
             dvdx += dNdx[k] * v[n[k]];

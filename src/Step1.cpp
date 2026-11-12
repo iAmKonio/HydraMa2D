@@ -21,7 +21,7 @@ void step1_kernel(const Mesh& mesh,
     rhs_u.assign(mesh.npoin, 0.0);
     rhs_v.assign(mesh.npoin, 0.0);
 
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         int ipn[3] = {mesh.intma[ie][0], mesh.intma[ie][1], mesh.intma[ie][2]};
         double lu[3] = {u[ipn[0]], u[ipn[1]], u[ipn[2]]};
         double lv[3] = {v[ipn[0]], v[ipn[1]], v[ipn[2]]};
@@ -99,6 +99,63 @@ void step1_kernel(const Mesh& mesh,
             int ip = ipn[in];
             rhs_u[ip] += lrhs_u[in];
             rhs_v[ip] += lrhs_v[in];
+        }
+    }
+
+    // Bilinear quadrilaterals: the same weak form, 2 x 2 Gauss-Legendre
+    // (docs/QUADRILATERAL_ELEMENTS.md, section 6):
+    //   - int N_a (u . grad) u
+    //   - dt/2 int (u_c . grad N_a) (u_c . grad) u          u_c: element-centre velocity
+    //   - nu int grad N_a . grad u    [- nu_t int grad N_a . (grad u + grad u^T)]
+    const auto& shape = q1::gauss_shape();
+    for (int q = 0; q < mesh.num_quads(); ++q) {
+        const int ie = mesh.element_of_quad(q);
+        const auto& n = mesh.quads[static_cast<std::size_t>(q)];
+        const QuadGeometry& geo = mesh.quad_geom[static_cast<std::size_t>(q)];
+        const double lu[4] = {u[n[0]], u[n[1]], u[n[2]], u[n[3]]};
+        const double lv[4] = {v[n[0]], v[n[1]], v[n[2]], v[n[3]]};
+        const double uc = 0.25 * (lu[0] + lu[1] + lu[2] + lu[3]); // value at (0, 0)
+        const double vc = 0.25 * (lv[0] + lv[1] + lv[2] + lv[3]);
+        const double dt_half = 0.5 * delte[ie];
+        double nut = 0.0;
+        if constexpr (kTurbulent) nut = (*nut_elem)[ie];
+
+        double lrhs_u[4] = {0.0, 0.0, 0.0, 0.0};
+        double lrhs_v[4] = {0.0, 0.0, 0.0, 0.0};
+        for (int g = 0; g < q1::kGaussPoints; ++g) {
+            const double W = geo.weight[g];
+            const auto& N = shape[g];
+            const auto& dNdx = geo.dNdx[g];
+            const auto& dNdy = geo.dNdy[g];
+            double ug = 0.0, vg = 0.0, ux = 0.0, uy = 0.0, vx = 0.0, vy = 0.0;
+            for (int a = 0; a < 4; ++a) {
+                ug += N[a] * lu[a];
+                vg += N[a] * lv[a];
+                ux += dNdx[a] * lu[a];
+                uy += dNdy[a] * lu[a];
+                vx += dNdx[a] * lv[a];
+                vy += dNdy[a] * lv[a];
+            }
+            const double conv_u = ug * ux + vg * uy; // (u . grad) u at g
+            const double conv_v = ug * vx + vg * vy;
+            const double stab_u = uc * ux + vc * uy; // (u_c . grad) u at g
+            const double stab_v = uc * vx + vc * vy;
+            for (int a = 0; a < 4; ++a) {
+                const double adv = dNdx[a] * uc + dNdy[a] * vc;
+                double ru = N[a] * conv_u + dt_half * adv * stab_u + ani * (dNdx[a] * ux + dNdy[a] * uy);
+                double rv = N[a] * conv_v + dt_half * adv * stab_v + ani * (dNdx[a] * vx + dNdy[a] * vy);
+                if constexpr (kTurbulent) {
+                    const double shear = uy + vx;
+                    ru += nut * (dNdx[a] * 2.0 * ux + dNdy[a] * shear);
+                    rv += nut * (dNdx[a] * shear + dNdy[a] * 2.0 * vy);
+                }
+                lrhs_u[a] -= W * ru;
+                lrhs_v[a] -= W * rv;
+            }
+        }
+        for (int a = 0; a < 4; ++a) {
+            rhs_u[n[a]] += lrhs_u[a];
+            rhs_v[n[a]] += lrhs_v[a];
         }
     }
 }

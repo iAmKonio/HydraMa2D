@@ -6,9 +6,13 @@ namespace hydrama {
 
 std::vector<double> lumped_nodal_mass(const Mesh& mesh) {
     std::vector<double> mass(mesh.npoin, 0.0);
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const double third = mesh.detJ[ie] / 6.0; // area / 3
         for (int k = 0; k < Mesh::nep; ++k) mass[mesh.intma[ie][k]] += third;
+    }
+    for (int q = 0; q < mesh.num_quads(); ++q) { // row-sum lumped: int N_a dOmega
+        const auto& n = mesh.quads[static_cast<std::size_t>(q)];
+        for (int a = 0; a < Mesh::nep_quad; ++a) mass[n[a]] += mesh.quad_geom[static_cast<std::size_t>(q)].mass[a];
     }
     return mass;
 }
@@ -16,7 +20,7 @@ std::vector<double> lumped_nodal_mass(const Mesh& mesh) {
 void compute_scalar_gradients(const Mesh& mesh, const std::vector<double>& phi,
                               std::vector<std::array<double, 2>>& grad) {
     grad.resize(mesh.nelem);
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const auto& n = mesh.intma[ie];
         const double* dNdx = mesh.dNkdx[ie].dNdx;
         const double* dNdy = mesh.dNkdx[ie].dNdy;
@@ -24,12 +28,36 @@ void compute_scalar_gradients(const Mesh& mesh, const std::vector<double>& phi,
         grad[ie] = {dNdx[0] * p0 + dNdx[1] * p1 + dNdx[2] * p2,
                     dNdy[0] * p0 + dNdy[1] * p1 + dNdy[2] * p2};
     }
+    for (int ie = mesh.num_triangles(); ie < mesh.nelem; ++ie) { // area-averaged gradient
+        const ElementNodes n = mesh.element_nodes(ie);
+        const double* dNdx = mesh.dNkdx[ie].dNdx;
+        const double* dNdy = mesh.dNkdx[ie].dNdy;
+        double gx = 0.0, gy = 0.0;
+        for (int a = 0; a < 4; ++a) {
+            gx += dNdx[a] * phi[n[a]];
+            gy += dNdy[a] * phi[n[a]];
+        }
+        grad[ie] = {gx, gy};
+    }
 }
 
 void compute_velocity_gradients(const Mesh& mesh, const std::vector<double>& u,
                                 const std::vector<double>& v, std::vector<VelocityGradient>& grad) {
     grad.resize(mesh.nelem);
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = mesh.num_triangles(); ie < mesh.nelem; ++ie) { // quadrilaterals: area-averaged gradient
+        const ElementNodes n = mesh.element_nodes(ie);
+        const double* dNdx = mesh.dNkdx[ie].dNdx;
+        const double* dNdy = mesh.dNkdx[ie].dNdy;
+        VelocityGradient& g = grad[ie];
+        g = VelocityGradient{};
+        for (int a = 0; a < 4; ++a) {
+            g.dudx += dNdx[a] * u[n[a]];
+            g.dudy += dNdy[a] * u[n[a]];
+            g.dvdx += dNdx[a] * v[n[a]];
+            g.dvdy += dNdy[a] * v[n[a]];
+        }
+    }
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const auto& n = mesh.intma[ie];
         const double* dNdx = mesh.dNkdx[ie].dNdx;
         const double* dNdy = mesh.dNkdx[ie].dNdy;
@@ -46,9 +74,15 @@ void compute_velocity_gradients(const Mesh& mesh, const std::vector<double>& u,
 void project_to_nodes(const Mesh& mesh, const std::vector<double>& nodal_mass,
                       const std::vector<double>& elem_values, std::vector<double>& nodal_values) {
     nodal_values.assign(mesh.npoin, 0.0);
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const double w = elem_values[ie] * mesh.detJ[ie] / 6.0;
         for (int k = 0; k < Mesh::nep; ++k) nodal_values[mesh.intma[ie][k]] += w;
+    }
+    for (int q = 0; q < mesh.num_quads(); ++q) { // sum_e v_e int N_a dOmega
+        const double value = elem_values[mesh.element_of_quad(q)];
+        const auto& n = mesh.quads[static_cast<std::size_t>(q)];
+        for (int a = 0; a < Mesh::nep_quad; ++a)
+            nodal_values[n[a]] += value * mesh.quad_geom[static_cast<std::size_t>(q)].mass[a];
     }
     for (int ip = 0; ip < mesh.npoin; ++ip) nodal_values[ip] /= nodal_mass[ip];
 }
@@ -56,9 +90,14 @@ void project_to_nodes(const Mesh& mesh, const std::vector<double>& nodal_mass,
 void element_mean(const Mesh& mesh, const std::vector<double>& nodal_values,
                   std::vector<double>& elem_values) {
     elem_values.resize(mesh.nelem);
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const auto& n = mesh.intma[ie];
         elem_values[ie] = (nodal_values[n[0]] + nodal_values[n[1]] + nodal_values[n[2]]) / 3.0;
+    }
+    for (int q = 0; q < mesh.num_quads(); ++q) { // value at the element centre
+        const auto& n = mesh.quads[static_cast<std::size_t>(q)];
+        elem_values[mesh.element_of_quad(q)] =
+            (nodal_values[n[0]] + nodal_values[n[1]] + nodal_values[n[2]] + nodal_values[n[3]]) / 4.0;
     }
 }
 
@@ -160,14 +199,14 @@ NodalGradient::NodalGradient(const Mesh& mesh, GradientRecovery method) : method
 
     // Node -> element adjacency (CSR).
     std::vector<int> adj_offset(npoin + 1, 0);
-    for (const auto& e : mesh.intma)
-        for (int ip : e) ++adj_offset[ip + 1];
+    for (int ie = 0; ie < mesh.nelem; ++ie)
+        for (int ip : mesh.element_nodes(ie)) ++adj_offset[ip + 1];
     for (int ip = 0; ip < npoin; ++ip) adj_offset[ip + 1] += adj_offset[ip];
     std::vector<int> adj(adj_offset[npoin]);
     {
         std::vector<int> fill(adj_offset.begin(), adj_offset.end() - 1);
         for (int ie = 0; ie < mesh.nelem; ++ie)
-            for (int ip : mesh.intma[ie]) adj[fill[ip]++] = ie;
+            for (int ip : mesh.element_nodes(ie)) adj[fill[ip]++] = ie;
     }
 
     std::vector<char> on_boundary(npoin, 0);
@@ -192,7 +231,7 @@ NodalGradient::NodalGradient(const Mesh& mesh, GradientRecovery method) : method
         out.clear();
         for (int s : seeds) {
             for (int k = adj_offset[s]; k < adj_offset[s + 1]; ++k) {
-                for (int jp : mesh.intma[adj[k]]) {
+                for (int jp : mesh.element_nodes(adj[k])) {
                     if (!mark[jp]) {
                         mark[jp] = 1;
                         out.push_back(jp);
@@ -224,19 +263,42 @@ NodalGradient::NodalGradient(const Mesh& mesh, GradientRecovery method) : method
         }
         if (!done) {
             // Lumped projection of the element gradients as a nodal stencil:
-            // G_ij = sum_{e contains i, j} (A_e/3) / M_i grad N_j^e.
+            // G_ij = sum_{e contains i, j} int N_i grad N_j^e dOmega / M_i
+            // (triangles: (A_e/3) / M_i grad N_j^e; quadrilaterals: 2 x 2 Gauss).
             list.clear();
             for (int k = adj_offset[ip]; k < adj_offset[ip + 1]; ++k) {
                 const int ie = adj[k];
-                const double w = mesh.detJ[ie] / 6.0 / mass[ip];
-                for (int c = 0; c < Mesh::nep; ++c) {
-                    const int jp = mesh.intma[ie][c];
+                const ElementNodes nodes = mesh.element_nodes(ie);
+                if (!mesh.is_quad(ie)) {
+                    const double w = mesh.detJ[ie] / 6.0 / mass[ip];
+                    for (int c = 0; c < Mesh::nep; ++c) {
+                        const int jp = mesh.intma[ie][c];
+                        if (!mark[jp]) {
+                            mark[jp] = 1;
+                            list.push_back(jp);
+                        }
+                        acc_x[jp] += w * mesh.dNkdx[ie].dNdx[c];
+                        acc_y[jp] += w * mesh.dNkdx[ie].dNdy[c];
+                    }
+                    continue;
+                }
+                const QuadGeometry& geo = mesh.quad_geom[static_cast<std::size_t>(mesh.quad_of(ie))];
+                int local = 0; // position of ip in the element
+                while (nodes[local] != ip) ++local;
+                for (int c = 0; c < Mesh::nep_quad; ++c) {
+                    const int jp = nodes[c];
                     if (!mark[jp]) {
                         mark[jp] = 1;
                         list.push_back(jp);
                     }
-                    acc_x[jp] += w * mesh.dNkdx[ie].dNdx[c];
-                    acc_y[jp] += w * mesh.dNkdx[ie].dNdy[c];
+                    double sx = 0.0, sy = 0.0;
+                    for (int g = 0; g < q1::kGaussPoints; ++g) {
+                        const double wN = geo.weight[g] * q1::gauss_shape()[g][local];
+                        sx += wN * geo.dNdx[g][c];
+                        sy += wN * geo.dNdy[g][c];
+                    }
+                    acc_x[jp] += sx / mass[ip];
+                    acc_y[jp] += sy / mass[ip];
                 }
             }
             for (int jp : list) {

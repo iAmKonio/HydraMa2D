@@ -18,7 +18,7 @@ void assemble_scalar_transport(const Mesh& mesh,
         s.rhs->assign(mesh.npoin, 0.0);
     }
 
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         const int ipn[3] = {mesh.intma[ie][0], mesh.intma[ie][1], mesh.intma[ie][2]};
         const double lu[3] = {u[ipn[0]], u[ipn[1]], u[ipn[2]]};
         const double lv[3] = {v[ipn[0]], v[ipn[1]], v[ipn[2]]};
@@ -56,6 +56,53 @@ void assemble_scalar_transport(const Mesh& mesh,
                 lrhs -= (dNdx[in] * gx + dNdy[in] * gy) * lfact_diff;
                 rhs[ipn[in]] += lrhs;
             }
+        }
+    }
+
+    // Bilinear quadrilaterals: the weak form of Step 1 for a scalar, 2 x 2
+    // Gauss-Legendre: - int N_a u . grad phi - dt/2 int (u_c . grad N_a)(u_c . grad phi)
+    //                 - int Gamma grad N_a . grad phi       (u_c: element-centre velocity)
+    const auto& shape = q1::gauss_shape();
+    for (int q = 0; q < mesh.num_quads(); ++q) {
+        const int ie = mesh.element_of_quad(q);
+        const auto& n = mesh.quads[static_cast<std::size_t>(q)];
+        const QuadGeometry& geo = mesh.quad_geom[static_cast<std::size_t>(q)];
+        const double lu[4] = {u[n[0]], u[n[1]], u[n[2]], u[n[3]]};
+        const double lv[4] = {v[n[0]], v[n[1]], v[n[2]], v[n[3]]};
+        const double uc = 0.25 * (lu[0] + lu[1] + lu[2] + lu[3]);
+        const double vc = 0.25 * (lv[0] + lv[1] + lv[2] + lv[3]);
+        const double dt_half = 0.5 * delte[ie];
+        double ug[4], vg[4];
+        for (int g = 0; g < q1::kGaussPoints; ++g) {
+            ug[g] = vg[g] = 0.0;
+            for (int a = 0; a < 4; ++a) {
+                ug[g] += shape[g][a] * lu[a];
+                vg[g] += shape[g][a] * lv[a];
+            }
+        }
+        for (const TransportedScalar& s : scalars) {
+            const std::vector<double>& phi = *s.phi;
+            const double lp[4] = {phi[n[0]], phi[n[1]], phi[n[2]], phi[n[3]]};
+            const double gamma = (*s.diffusivity)[ie];
+            double lrhs[4] = {0.0, 0.0, 0.0, 0.0};
+            for (int g = 0; g < q1::kGaussPoints; ++g) {
+                const auto& dNdx = geo.dNdx[g];
+                const auto& dNdy = geo.dNdy[g];
+                double gx = 0.0, gy = 0.0;
+                for (int a = 0; a < 4; ++a) {
+                    gx += dNdx[a] * lp[a];
+                    gy += dNdy[a] * lp[a];
+                }
+                const double conv = ug[g] * gx + vg[g] * gy;
+                const double stab = uc * gx + vc * gy;
+                for (int a = 0; a < 4; ++a) {
+                    const double adv = dNdx[a] * uc + dNdy[a] * vc;
+                    lrhs[a] -= geo.weight[g] * (shape[g][a] * conv + dt_half * adv * stab +
+                                                gamma * (dNdx[a] * gx + dNdy[a] * gy));
+                }
+            }
+            std::vector<double>& rhs = *s.rhs;
+            for (int a = 0; a < 4; ++a) rhs[n[a]] += lrhs[a];
         }
     }
 }

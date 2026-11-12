@@ -2,6 +2,10 @@
 
 #include "linalg/Factory.hpp"
 #include "linalg/Reordering.hpp"
+#include "mesh/GmshReader.hpp"
+#include "mesh/MeshBuilder.hpp"
+#include "mesh/CgnsReader.hpp"
+#include "mesh/Su2Reader.hpp"
 
 #include <fstream>
 #include <sstream>
@@ -15,6 +19,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include <filesystem>
 #include <set>
 
 namespace hydrama {
@@ -255,6 +260,19 @@ bool IO::read_turbulence(const std::string& filepath, TurbulenceConfig& config) 
     return true;
 }
 
+bool IO::read_case_mesh(const std::string& constant_dir, const std::string& casename, Mesh& mesh) {
+    MeshFileLocation mesh_file;
+    if (!locate_mesh_file(constant_dir, casename, mesh_file)) return false;
+    const std::string bofl_path = constant_dir + "/" + casename + ".bofl";
+    switch (mesh_file.format) {
+    case MeshFileFormat::Legacy: return read_mesh(mesh_file.path, mesh) && read_boundary_flags(bofl_path, mesh);
+    case MeshFileFormat::Gmsh: return read_gmsh_mesh(mesh_file.path, bofl_path, mesh);
+    case MeshFileFormat::Su2: return read_su2_mesh(mesh_file.path, bofl_path, mesh);
+    case MeshFileFormat::Cgns: return read_cgns_mesh(mesh_file.path, bofl_path, mesh);
+    }
+    return false;
+}
+
 bool IO::read_mesh(const std::string& filepath, Mesh& mesh) {
     std::ifstream in(filepath);
     if (!in.is_open()) {
@@ -381,7 +399,7 @@ bool IO::read_boundary_flags(const std::string& filepath, Mesh& mesh) {
     for (int i = 0; i < nflag; ++i) {
         in >> flag_list[i].first >> flag_list[i].second;
         int code = flag_list[i].second;
-        if (code < 500 || code > 507) {
+        if (code < 500 || code > 508) {
             std::cout << "WARNING: BOUNDARY FLAG CODE IN FILE DOES NOT MATCH KNOWN TYPES: " << code << "\n";
         }
     }
@@ -402,6 +420,117 @@ bool IO::read_boundary_flags(const std::string& filepath, Mesh& mesh) {
     }
 
     return true;
+}
+
+bool IO::locate_mesh_file(const std::string& constant_dir, const std::string& casename,
+                          MeshFileLocation& location) {
+    namespace fs = std::filesystem;
+    struct Candidate {
+        fs::path path;
+        MeshFileFormat format;
+        const char* description;
+    };
+    const Candidate candidates[] = {
+        {fs::path(constant_dir) / (casename + ".mesh"), MeshFileFormat::Legacy, "legacy format"},
+        {fs::path(constant_dir) / (casename + ".msh"), MeshFileFormat::Gmsh, "Gmsh"},
+        {fs::path(constant_dir) / (casename + ".su2"), MeshFileFormat::Su2, "SU2"},
+        {fs::path(constant_dir) / (casename + ".cgns"), MeshFileFormat::Cgns, "CGNS"},
+    };
+    std::vector<const Candidate*> found;
+    std::error_code ec;
+    for (const Candidate& c : candidates)
+        if (fs::is_regular_file(c.path, ec)) found.push_back(&c);
+    if (found.size() > 1) {
+        std::cerr << "ERROR: AMBIGUOUS MESH:";
+        for (const Candidate* c : found) std::cerr << " " << c->path.string();
+        std::cerr << " EXIST; KEEP ONLY ONE MESH FILE PER CASE\n";
+        return false;
+    }
+    if (found.empty()) {
+        std::cerr << "ERROR: MESH FILE DOES NOT EXIST:";
+        for (std::size_t i = 0; i < std::size(candidates); ++i) {
+            std::cerr << (i == 0 ? " " : (i + 1 == std::size(candidates) ? " OR " : ", "))
+                      << candidates[i].path.string() << " (" << candidates[i].description << ")";
+        }
+        std::cerr << "\n";
+        return false;
+    }
+    location.path = found.front()->path.string();
+    location.format = found.front()->format;
+    return true;
+}
+
+bool IO::read_boundary_flag_table(const std::string& filepath, std::map<int, int>& table) {
+    table.clear();
+    std::ifstream in(filepath);
+    if (!in.is_open()) {
+        std::cerr << "ERROR: BOUNDARY FLAG FILE DOES NOT EXIST: " << filepath << "\n";
+        return false;
+    }
+    std::string token;
+    int nflag = 0;
+    if (!(in >> token) || !parse_int(token, nflag) || nflag < 0) {
+        std::cerr << "ERROR: " << filepath << ": THE FIRST VALUE MUST BE THE NUMBER OF ENTRIES\n";
+        return false;
+    }
+    for (int i = 0; i < nflag; ++i) {
+        std::string id_token, code_token;
+        int id = 0, code = 0;
+        if (!(in >> id_token >> code_token) || !parse_int(id_token, id) || !parse_int(code_token, code)) {
+            std::cerr << "ERROR: " << filepath << ": ENTRY " << (i + 1) << " OF " << nflag
+                      << " IS MISSING OR NOT A PAIR OF INTEGERS \"id code\"\n";
+            return false;
+        }
+        if (!table.emplace(id, code).second) {
+            std::cerr << "ERROR: " << filepath << ": DUPLICATE ENTRY FOR ID " << id << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+namespace {
+
+// Shared path of the mesh readers that produce mesh::MeshData: optional
+// *.bofl overrides, build_mesh, report, error handling.
+template <typename Reader>
+bool import_mesh(const std::string& path, const std::string& bofl_path, const char* key_name, Reader read,
+                 Mesh& mesh) {
+    mesh::BuildOptions options;
+    std::error_code ec;
+    if (!bofl_path.empty() && std::filesystem::is_regular_file(bofl_path, ec)) {
+        if (!IO::read_boundary_flag_table(bofl_path, options.flag_overrides)) return false;
+        std::cout << "Boundary flag overrides: " << bofl_path << " (" << options.flag_overrides.size()
+                  << " entries, by " << key_name << ")\n";
+    }
+    try {
+        const mesh::MeshData data = read(path);
+        mesh::ImportReport report;
+        mesh = mesh::build_mesh(data, options, &report);
+        std::cout << "Mesh file: " << path << "\n" << mesh::format_report(report);
+    } catch (const mesh::MeshImportError& e) {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        return false;
+    } catch (const std::exception& e) {
+        // E.g. std::bad_alloc for absurd sizes in a corrupt file.
+        std::cerr << "ERROR: " << path << ": cannot read the mesh (" << e.what() << "); is the file corrupt?\n";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool IO::read_gmsh_mesh(const std::string& msh_path, const std::string& bofl_path, Mesh& mesh) {
+    return import_mesh(msh_path, bofl_path, "physical tag", mesh::read_gmsh, mesh);
+}
+
+bool IO::read_su2_mesh(const std::string& su2_path, const std::string& bofl_path, Mesh& mesh) {
+    return import_mesh(su2_path, bofl_path, "marker number", mesh::read_su2, mesh);
+}
+
+bool IO::read_cgns_mesh(const std::string& cgns_path, const std::string& bofl_path, Mesh& mesh) {
+    return import_mesh(cgns_path, bofl_path, "BC number", mesh::read_cgns, mesh);
 }
 
 static bool parse_restart_double(std::string token, double& out) {
@@ -529,16 +658,23 @@ bool IO::write_vtk(const std::string& filepath,
         out << mesh.x[i] << " " << mesh.y[i] << " 0.0\n";
     }
 
-    // CELLS: each cell line: nep (3) followed by node IDs
-    out << "CELLS " << mesh.nelem << " " << (mesh.nelem * 4) << "\n";
-    for (int i = 0; i < mesh.nelem; ++i) {
+    // CELLS: each cell line: number of nodes (3 or 4) followed by node IDs
+    const int ntri = mesh.num_triangles(), nquad = mesh.num_quads();
+    out << "CELLS " << mesh.nelem << " " << (ntri * 4 + nquad * 5) << "\n";
+    for (int i = 0; i < ntri; ++i) {
         out << "3 " << mesh.intma[i][0] << " " << mesh.intma[i][1] << " " << mesh.intma[i][2] << "\n";
     }
+    for (const auto& q : mesh.quads) {
+        out << "4 " << q[0] << " " << q[1] << " " << q[2] << " " << q[3] << "\n";
+    }
 
-    // CELL_TYPES: 5 for VTK_TRIANGLE
+    // CELL_TYPES: 5 for VTK_TRIANGLE, 9 for VTK_QUAD
     out << "CELL_TYPES " << mesh.nelem << "\n";
-    for (int i = 0; i < mesh.nelem; ++i) {
+    for (int i = 0; i < ntri; ++i) {
         out << "5\n";
+    }
+    for (int i = 0; i < nquad; ++i) {
+        out << "9\n";
     }
 
     // POINT_DATA

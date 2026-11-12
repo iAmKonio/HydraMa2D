@@ -29,7 +29,8 @@ TEST_CASE("BoundaryKind: flag code table", "[boundary_kind]") {
     CHECK(classify_boundary_flag(504) == BoundaryKind::Outlet);
     CHECK(classify_boundary_flag(506) == BoundaryKind::Symmetry);
     CHECK(classify_boundary_flag(507) == BoundaryKind::Inlet);
-    for (int unknown : {0, -1, 499, 505, 508, 600}) {
+    CHECK(classify_boundary_flag(508) == BoundaryKind::Inlet);
+    for (int unknown : {0, -1, 499, 505, 509, 600}) {
         INFO("flag " << unknown);
         CHECK(classify_boundary_flag(unknown) == BoundaryKind::Unknown);
         CHECK_FALSE(is_wall_flag(unknown));
@@ -41,6 +42,7 @@ TEST_CASE("BoundaryKind: flag code table", "[boundary_kind]") {
     CHECK(flags::kOutlet == 504);
     CHECK(flags::kSymmetry == 506);
     CHECK(flags::kInletProfile == 507);
+    CHECK(flags::kInletParabolic == 508);
 }
 
 TEST_CASE("BoundaryKind: names", "[boundary_kind]") {
@@ -52,13 +54,15 @@ TEST_CASE("BoundaryKind: names", "[boundary_kind]") {
 }
 
 TEST_CASE("BoundaryKind agrees with the legacy boundary routines", "[boundary_kind]") {
-    const int flag = GENERATE(0, 499, 500, 501, 502, 503, 504, 505, 506, 507, 508);
+    const int flag = GENERATE(0, 499, 500, 501, 502, 503, 504, 505, 506, 507, 508, 509);
     const BoundaryKind kind = classify_boundary_flag(flag);
     INFO("flag " << flag << " (" << to_string(kind) << ")");
 
     // A triangle whose three edges all carry `flag`; no edge is axis-aligned,
     // so the symmetry projection changes any generic velocity.
     Mesh m = make_triangle_mesh({"scalene", {{{1.0, 1.0}, {4.0, 2.0}, {2.0, 5.0}}}}, flag);
+    // A parabolic inlet (508) must be an open curve: only the first edge.
+    if (flag == flags::kInletParabolic) m.iside[1].flag = m.iside[2].flag = 0;
     compute_geometry(m);
 
     SECTION("walls: Mesh::determine_wall_nodes") {

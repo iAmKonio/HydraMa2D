@@ -1,5 +1,6 @@
 #include "Solver.hpp"
 #include "IO.hpp"
+#include "mesh/MeshQuality.hpp"
 #include "Step1.hpp"
 #include "Step2.hpp"
 #include "Step3.hpp"
@@ -53,11 +54,10 @@ bool Solver::initialize() {
         }
     }
 
-    // Read mesh and boundary definitions
-    if (!IO::read_mesh(prefix + "constant/" + config_.casename + ".mesh", mesh_)) {
-        return false;
-    }
-    if (!IO::read_boundary_flags(prefix + "constant/" + config_.casename + ".bofl", mesh_)) {
+    // Read mesh and boundary definitions: constant/<case>.mesh + <case>.bofl
+    // (legacy format), constant/<case>.msh (Gmsh), constant/<case>.su2 (SU2)
+    // or constant/<case>.cgns (CGNS); for the last three <case>.bofl is optional.
+    if (!IO::read_case_mesh(prefix + "constant", config_.casename, mesh_)) {
         return false;
     }
 
@@ -70,6 +70,20 @@ bool Solver::initialize() {
     mesh_.determine_wall_nodes();
     mesh_.compute_element_sizes();
     mesh_.compute_laplacian_stiffness();
+    std::cout << mesh::format_quality_report(mesh_, mesh::assess_mesh_quality(mesh_));
+
+    // Parabolic (fully developed) inlets: check that they are open curves.
+    try {
+        const std::vector<NodeVelocity> inflow = parabolic_inlet_velocities(mesh_);
+        if (!inflow.empty()) {
+            double peak = 0.0;
+            for (const NodeVelocity& nv : inflow) peak = std::max(peak, std::hypot(nv.u, nv.v));
+            std::cout << "Parabolic inlet (508): " << inflow.size() << " nodes, peak velocity " << peak << "\n";
+        }
+    } catch (const std::invalid_argument& e) {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        return false;
+    }
 
     // Allocate field unknowns
     int npoin = mesh_.npoin;
@@ -125,13 +139,68 @@ bool Solver::initialize() {
     delte_.resize(mesh_.nelem);
     elcoe2_.resize(npoin);
     pdiag_.resize(npoin);
-    gstif_.resize(mesh_.nelem);
+    gstif_.resize(static_cast<std::size_t>(mesh_.num_offdiag_blocks()));
 
     if (turbulence_ && !initialize_turbulence(prefix, restarted)) {
         return false;
     }
 
+    if (!initialize_monitors(prefix, restarted)) {
+        return false;
+    }
+
     return true;
+}
+
+bool Solver::initialize_monitors(const std::string& prefix, bool restarted) {
+    const std::string path = prefix + "system/" + config_.casename + ".monitors";
+    post::MonitorConfig mc;
+    bool found = false;
+    std::string error;
+    if (!post::read_monitor_config(path, mc, found, error)) {
+        std::cerr << "ERROR: *.monitors FILE HAS INVALID FORMAT: " << error << "\n";
+        return false;
+    }
+    if (!found) return true; // no monitors: nothing changes
+    try {
+        monitors_ = std::make_unique<post::Monitors>(mesh_, std::move(mc));
+    } catch (const std::invalid_argument& e) {
+        std::cerr << "ERROR: " << e.what() << "\n";
+        return false;
+    }
+    std::cout << monitors_->description();
+    const std::string out = prefix + "results/" + config_.casename + ".monitors.dat";
+    // A restarted run continues the history of the previous one.
+    const bool append = restarted && std::filesystem::exists(out);
+    monitors_file_.open(out, append ? std::ios::app : std::ios::trunc);
+    if (!monitors_file_) {
+        std::cerr << "ERROR: CANNOT WRITE MONITOR FILE: " << out << "\n";
+        return false;
+    }
+    if (!append) monitors_file_ << monitors_->file_header(config_.casename);
+    std::cout << "Monitors: writing " << out << (append ? " (appending)" : "") << "\n";
+    return true;
+}
+
+void Solver::record_monitors(int iitime, bool force) {
+    if (!monitors_ || iitime == last_sampled_step_) return;
+    if (!force && iitime % monitors_->config().interval != 0) return;
+    // Transient runs have one global time step: the force includes du/dt.
+    const bool transient = config_.control.transient_on > 0 && !delte_.empty() && delte_[0] > 0.0;
+    if (transient) {
+        dudt_.resize(u_.size());
+        dvdt_.resize(v_.size());
+        for (std::size_t i = 0; i < u_.size(); ++i) {
+            dudt_[i] = (u_[i] - u_old_[i]) / delte_[0];
+            dvdt_[i] = (v_[i] - v_old_[i]) / delte_[0];
+        }
+    }
+    last_sample_ = monitors_->evaluate(mesh_, ani_, u_, v_, p_, transient ? &dudt_ : nullptr,
+                                       transient ? &dvdt_ : nullptr);
+    has_sample_ = true;
+    last_sampled_step_ = iitime;
+    monitors_file_ << monitors_->format_row(iitime, rtime_, last_sample_);
+    monitors_file_.flush();
 }
 
 TurbulenceContext Solver::turbulence_context() const {
@@ -359,6 +428,8 @@ void Solver::run() {
             turbulence_->advance(turbulence_context(), {u_, v_});
         }
 
+        record_monitors(iitime);
+
         // Update Velocity Magnitude
         velocity_old_ = velocity_;
         for (int ip = 0; ip < mesh_.npoin; ++ip) {
@@ -444,6 +515,13 @@ void Solver::run() {
         }
     }
 
+    // The final state of the run is always sampled (e.g. a steady run that
+    // converged between two monitor intervals). Not for an empty run (restart
+    // beyond the last step).
+    if (completed_time >= istart_ && completed_time <= config_.control.ntime) {
+        record_monitors(completed_time, true);
+    }
+
     std::cout << " Simulation Completed\n";
     if (!pressure_solver_->legacy()) {
         const PressureSolver::SetupStatistics& st = pressure_solver_->statistics();
@@ -454,6 +532,13 @@ void Solver::run() {
     if (config_.control.transient_on < 1) {
         std::cout << " Outputting Data\n";
         output_results(completed_time, rtime_);
+    }
+
+    if (monitors_ && has_sample_ && monitors_->has_body()) {
+        std::ostringstream line; // own stream: the format of std::cout stays as it is
+        line << std::setprecision(8) << " Monitors (last sample): cd " << last_sample_.cd << ", cl " << last_sample_.cl
+             << " (surface: cd " << last_sample_.cd_surface << ", cl " << last_sample_.cl_surface << ")\n";
+        std::cout << line.str();
     }
 
     auto t_final = std::chrono::steady_clock::now();

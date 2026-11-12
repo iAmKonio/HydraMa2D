@@ -3,8 +3,37 @@
 #include <iostream>
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
+#include <string>
 
 namespace hydrama {
+
+ElementNodes Mesh::element_nodes(int e) const {
+    ElementNodes n;
+    if (is_quad(e)) {
+        const auto& q = quads[static_cast<std::size_t>(quad_of(e))];
+        n.node = {q[0], q[1], q[2], q[3]};
+        n.count = 4;
+    } else {
+        const auto& t = intma[static_cast<std::size_t>(e)];
+        n.node = {t[0], t[1], t[2], -1};
+        n.count = 3;
+    }
+    return n;
+}
+
+double Mesh::height_above_edge(int e, int n1, int n2) const {
+    const double dx = x[n2] - x[n1], dy = y[n2] - y[n1];
+    const double L = std::sqrt(dx * dx + dy * dy);
+    if (!is_quad(e)) return std::abs(detJ[e]) / L; // 2 A / L
+    // Quadrilateral: mean distance of the two nodes that are not on the edge.
+    double sum = 0.0;
+    for (int a : element_nodes(e)) {
+        if (a == n1 || a == n2) continue;
+        sum += std::abs(dy * (x[a] - x[n1]) - dx * (y[a] - y[n1])) / L;
+    }
+    return 0.5 * sum;
+}
 
 void Mesh::compute_shape_function_derivatives() {
     dNkdx.resize(nelem);
@@ -13,7 +42,8 @@ void Mesh::compute_shape_function_derivatives() {
     max_vol = 0.0;
     min_vol = std::numeric_limits<double>::max();
 
-    for (int ie = 0; ie < nelem; ++ie) {
+    const int ntri = num_triangles();
+    for (int ie = 0; ie < ntri; ++ie) {
         int n0 = intma[ie][0];
         int n1 = intma[ie][1];
         int n2 = intma[ie][2];
@@ -47,6 +77,29 @@ void Mesh::compute_shape_function_derivatives() {
         min_vol = std::min(min_vol, area);
     }
 
+    // Quadrilaterals: 2 x 2 Gauss-Legendre data (numerics/QuadElement.hpp).
+    quad_geom.resize(quads.size());
+    for (int q = 0; q < num_quads(); ++q) {
+        const auto& n = quads[static_cast<std::size_t>(q)];
+        const double qx[4] = {x[n[0]], x[n[1]], x[n[2]], x[n[3]]};
+        const double qy[4] = {y[n[0]], y[n[1]], y[n[2]], y[n[3]]};
+        const int ie = element_of_quad(q);
+        try {
+            quad_geom[static_cast<std::size_t>(q)] = q1::compute_geometry(qx, qy);
+        } catch (const std::domain_error&) {
+            throw std::domain_error("quadrilateral element " + std::to_string(ie) +
+                                    " has a non-positive Jacobian determinant (clockwise, non-convex or degenerate)");
+        }
+        const QuadGeometry& g = quad_geom[static_cast<std::size_t>(q)];
+        for (int a = 0; a < 4; ++a) {
+            dNkdx[ie].dNdx[a] = g.mean_dNdx[a];
+            dNkdx[ie].dNdy[a] = g.mean_dNdy[a];
+        }
+        detJ[ie] = 2.0 * g.area;
+        max_vol = std::max(max_vol, g.area);
+        min_vol = std::min(min_vol, g.area);
+    }
+
     std::cout << "Maximum Volume " << max_vol << "\n";
     std::cout << "Minimum Volume " << min_vol << "\n";
     if (min_vol > 0.0) {
@@ -55,9 +108,11 @@ void Mesh::compute_shape_function_derivatives() {
 }
 
 void Mesh::compute_mass_matrix() {
-    // Lumped mass matrix component per node in each element: detJ / 6.0 = area / 3.0
-    elcoe_e.resize(nep * nelem);
-    for (int ie = 0; ie < nelem; ++ie) {
+    // Lumped mass matrix component per node in each triangle: detJ / 6.0 = area / 3.0.
+    // Quadrilaterals: row-sum lumped mass int N_a dOmega in quad_geom (computed
+    // with the shape function derivatives).
+    elcoe_e.resize(nep * intma.size());
+    for (int ie = 0; ie < num_triangles(); ++ie) {
         double ldetJ = detJ[ie] / 6.0;
         for (int in = 0; in < nep; ++in) {
             elcoe_e[ie * nep + in] = ldetJ;
@@ -136,7 +191,7 @@ void Mesh::determine_wall_nodes() {
 void Mesh::compute_element_sizes() {
     alen_e.assign(nelem, std::numeric_limits<double>::max());
 
-    for (int ie = 0; ie < nelem; ++ie) {
+    for (int ie = 0; ie < num_triangles(); ++ie) {
         int n0 = intma[ie][0];
         int n1 = intma[ie][1];
         int n2 = intma[ie][2];
@@ -157,13 +212,25 @@ void Mesh::compute_element_sizes() {
 
         alen_e[ie] = std::min({h0, h1, h2});
     }
+
+    // Quadrilaterals: minimum of area / edge length over the four edges (for a
+    // rectangle hx x hy: min(hx, hy); for a parallelogram: its smaller height).
+    for (int q = 0; q < num_quads(); ++q) {
+        const auto& n = quads[static_cast<std::size_t>(q)];
+        double longest = 0.0;
+        for (int k = 0; k < 4; ++k) {
+            const int a = n[static_cast<std::size_t>(k)], b = n[static_cast<std::size_t>((k + 1) % 4)];
+            longest = std::max(longest, std::sqrt((x[b] - x[a]) * (x[b] - x[a]) + (y[b] - y[a]) * (y[b] - y[a])));
+        }
+        alen_e[element_of_quad(q)] = quad_geom[static_cast<std::size_t>(q)].area / longest;
+    }
 }
 
 void Mesh::compute_laplacian_stiffness() {
-    pdiagE.resize(nelem);
-    gstifE.resize(nelem);
+    pdiagE.resize(intma.size());
+    gstifE.resize(intma.size());
 
-    for (int ie = 0; ie < nelem; ++ie) {
+    for (int ie = 0; ie < num_triangles(); ++ie) {
         double ldetJ = detJ[ie] * 0.5; // Area
 
         // Diagonal components for the 3 nodes
@@ -184,6 +251,9 @@ void Mesh::compute_laplacian_stiffness() {
         gstifE[ie][2] = (dNkdx[ie].dNdx[1] * dNkdx[ie].dNdx[2] +
                          dNkdx[ie].dNdy[1] * dNkdx[ie].dNdy[2]) * ldetJ;
     }
+    // Quadrilaterals: 2 x 2 Gauss-Legendre (numerics/QuadElement.hpp).
+    quad_lap.resize(quads.size());
+    for (int q = 0; q < num_quads(); ++q) quad_lap[static_cast<std::size_t>(q)] = q1::laplacian(quad_geom[static_cast<std::size_t>(q)]);
 }
 
 } // namespace hydrama

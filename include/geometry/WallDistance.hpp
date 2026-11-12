@@ -31,11 +31,12 @@ struct WallFace {
     int node1 = -1;         // 0-based end nodes, in the order of Mesh::iside
     int node2 = -1;
     int elem = -1;          // element adjacent to the face
-    int opposite_node = -1; // vertex of `elem` that is not on the face
+    int opposite_node = -1; // vertex of a triangle `elem` that is not on the face (-1 for quadrilaterals)
     double nx = 0.0;        // unit normal pointing INTO the fluid
     double ny = 0.0;
     double length = 0.0;
-    double yp = 0.0;        // height of `elem` above the face: 2 * area / length
+    double yp = 0.0;        // height of `elem` above the face: triangles 2 * area / length,
+                            // quadrilaterals the mean distance of the two off-face nodes
 };
 
 struct WallDistanceField {

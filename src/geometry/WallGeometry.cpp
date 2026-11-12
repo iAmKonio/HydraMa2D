@@ -26,7 +26,7 @@ WallGeometry::WallGeometry(const Mesh& mesh) : WallGeometry(mesh, AabbTreeWallDi
 WallGeometry::WallGeometry(const Mesh& mesh, const WallDistanceCalculator& distance) {
     if (mesh.npoin < 0 || static_cast<int>(mesh.x.size()) != mesh.npoin ||
         static_cast<int>(mesh.y.size()) != mesh.npoin ||
-        static_cast<int>(mesh.intma.size()) != mesh.nelem ||
+        mesh.num_triangles() + mesh.num_quads() != mesh.nelem ||
         static_cast<int>(mesh.iside.size()) != mesh.nboun) {
         fail("mesh arrays are inconsistent with npoin / nelem / nboun");
     }
@@ -47,19 +47,37 @@ void WallGeometry::build_faces(const Mesh& mesh) {
         if (!node_ok(side.node1) || !node_ok(side.node2)) fail(side_label(mesh, ib) + " references a node out of range");
         if (side.elem < 0 || side.elem >= mesh.nelem) fail(side_label(mesh, ib) + " references an element out of range");
 
-        // The face must be an edge of its element; the remaining vertex is the
-        // opposite node.
-        const auto& e = mesh.intma[side.elem];
-        int on_face = 0, opposite = -1;
-        for (int k = 0; k < Mesh::nep; ++k) {
+        // The face must be an edge of its element; the remaining vertex of a
+        // triangle is the opposite node. A quadrilateral has two off-face nodes.
+        const ElementNodes e = mesh.element_nodes(side.elem);
+        int on_face = 0, opposite = -1, off_face = 0;
+        double off_x = 0.0, off_y = 0.0; // mean of the off-face nodes
+        for (int k = 0; k < e.size(); ++k) {
             if (e[k] == side.node1 || e[k] == side.node2) {
                 ++on_face;
             } else {
                 opposite = e[k];
+                if (node_ok(e[k])) {
+                    off_x += mesh.x[e[k]];
+                    off_y += mesh.y[e[k]];
+                    ++off_face;
+                }
             }
         }
-        if (side.node1 == side.node2 || on_face != 2 || opposite < 0 || !node_ok(opposite)) {
+        if (side.node1 == side.node2 || on_face != 2 || opposite < 0 || off_face != e.size() - 2) {
             fail(side_label(mesh, ib) + " is not an edge of element " + std::to_string(side.elem));
+        }
+        const bool quad = mesh.is_quad(side.elem);
+        if (quad) {
+            // Adjacent nodes: the face must be an edge of the quadrilateral, not a diagonal.
+            int i1 = 0, i2 = 0;
+            for (int k = 0; k < 4; ++k) {
+                if (e[k] == side.node1) i1 = k;
+                if (e[k] == side.node2) i2 = k;
+            }
+            if ((i1 + 1) % 4 != i2 && (i2 + 1) % 4 != i1)
+                fail(side_label(mesh, ib) + " is not an edge of element " + std::to_string(side.elem));
+            opposite = -1;
         }
 
         const double x1 = mesh.x[side.node1], y1 = mesh.y[side.node1];
@@ -69,9 +87,11 @@ void WallGeometry::build_faces(const Mesh& mesh) {
         if (!(length > 0.0)) fail(side_label(mesh, ib) + " has zero length");
 
         // Unit normal to the face; its signed projection onto (opposite - node1)
-        // is the element height above the face. Orient it into the element.
+        // is the element height above the face (quadrilaterals: the mean of the
+        // two off-face nodes, i.e. their mean distance). Orient it into the element.
         double nx = dy / length, ny = -dx / length;
-        const double h = nx * (mesh.x[opposite] - x1) + ny * (mesh.y[opposite] - y1);
+        const double h = quad ? nx * (0.5 * off_x - x1) + ny * (0.5 * off_y - y1)
+                              : nx * (mesh.x[opposite] - x1) + ny * (mesh.y[opposite] - y1);
         if (!(std::abs(h) > 0.0)) fail("element " + std::to_string(side.elem) + " adjacent to " + side_label(mesh, ib) + " is degenerate");
         if (h < 0.0) {
             nx = -nx;

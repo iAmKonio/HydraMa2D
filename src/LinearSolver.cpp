@@ -28,12 +28,17 @@ void update_lhs(const Mesh& mesh,
                 std::vector<std::array<double, 3>>& gstif) {
     // 1. Update LHS Diagonal: Lumped Mass Matrix / dt
     elcoe2.assign(mesh.npoin, 0.0);
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         double dt = delte[ie];
         for (int in = 0; in < Mesh::nep; ++in) {
             int ip = mesh.intma[ie][in];
             elcoe2[ip] += mesh.elcoe_e[ie * Mesh::nep + in] / dt;
         }
+    }
+    for (int q = 0; q < mesh.num_quads(); ++q) {
+        const double dt = delte[mesh.element_of_quad(q)];
+        const auto& n = mesh.quads[static_cast<std::size_t>(q)];
+        for (int a = 0; a < Mesh::nep_quad; ++a) elcoe2[n[a]] += mesh.quad_geom[static_cast<std::size_t>(q)].mass[a] / dt;
     }
     for (int ip = 0; ip < mesh.npoin; ++ip) {
         elcoe2[ip] = 1.0 / elcoe2[ip];
@@ -41,9 +46,9 @@ void update_lhs(const Mesh& mesh,
 
     // 2. Update LHS Laplacian Matrix scaled by delte(ie)
     pdiag.assign(mesh.npoin, 0.0);
-    gstif.resize(mesh.nelem);
+    gstif.resize(static_cast<std::size_t>(mesh.num_offdiag_blocks()));
 
-    for (int ie = 0; ie < mesh.nelem; ++ie) {
+    for (int ie = 0; ie < mesh.num_triangles(); ++ie) {
         double dt = delte[ie];
 
         // Off-diagonals
@@ -56,6 +61,20 @@ void update_lhs(const Mesh& mesh,
             int ip = mesh.intma[ie][in];
             pdiag[ip] += mesh.pdiagE[ie][in] * dt;
         }
+    }
+
+    // Quadrilaterals: two blocks of three off-diagonal values each
+    // (pairs (0,1), (0,2), (0,3) and (1,2), (1,3), (2,3); Mesh::num_offdiag_blocks).
+    const std::size_t first_quad_block = mesh.intma.size();
+    for (int q = 0; q < mesh.num_quads(); ++q) {
+        const double dt = delte[mesh.element_of_quad(q)];
+        const QuadLaplacian& k = mesh.quad_lap[static_cast<std::size_t>(q)];
+        auto& b0 = gstif[first_quad_block + 2 * static_cast<std::size_t>(q)];
+        auto& b1 = gstif[first_quad_block + 2 * static_cast<std::size_t>(q) + 1];
+        b0 = {k.off[0] * dt, k.off[1] * dt, k.off[2] * dt};
+        b1 = {k.off[3] * dt, k.off[4] * dt, k.off[5] * dt};
+        const auto& n = mesh.quads[static_cast<std::size_t>(q)];
+        for (int a = 0; a < Mesh::nep_quad; ++a) pdiag[n[a]] += k.diag[a] * dt;
     }
 }
 
@@ -107,9 +126,10 @@ void timestep_kernel(int solver_opt, int dtfixed, int transient_on,
 
     for (int ie = 0; ie < mesh.nelem; ++ie) {
         double amin = mesh.alen_e[ie];
-        double velc = velocity[mesh.intma[ie][0]];
-        for (int in = 1; in < Mesh::nep; ++in) {
-            velc = std::max(velc, velocity[mesh.intma[ie][in]]);
+        const ElementNodes nodes = mesh.element_nodes(ie);
+        double velc = velocity[nodes[0]];
+        for (int in = 1; in < nodes.size(); ++in) {
+            velc = std::max(velc, velocity[nodes[in]]);
         }
         if (velc < 1.0e-15) velc = 1.0e-15;
 

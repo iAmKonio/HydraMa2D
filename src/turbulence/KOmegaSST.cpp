@@ -104,7 +104,8 @@ void KOmegaSST::initialize_fields(const TurbulenceContext& ctx) {
     for (const BoundarySide& side : mesh.iside) {
         if (config_.boundary_kind(side.flag) != BoundaryKind::Wall) continue;
         const double L = std::hypot(mesh.x[side.node2] - mesh.x[side.node1], mesh.y[side.node2] - mesh.y[side.node1]);
-        const double h = std::abs(mesh.detJ[side.elem]) / L;
+        const double h = mesh.is_quad(side.elem) ? mesh.height_above_edge(side.elem, side.node1, side.node2)
+                                                 : std::abs(mesh.detJ[side.elem]) / L;
         for (int ip : {side.node1, side.node2}) {
             height[ip] += h * L;
             length[ip] += L;

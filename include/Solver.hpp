@@ -6,8 +6,10 @@
 #include "LinearSolver.hpp"
 #include "PressureSolver.hpp"
 #include "geometry/WallGeometry.hpp"
+#include "post/Monitors.hpp"
 #include "turbulence/TurbulenceConfig.hpp"
 #include "turbulence/TurbulenceModel.hpp"
+#include <fstream>
 #include <memory>
 #include <vector>
 #include <string>
@@ -68,12 +70,24 @@ private:
     // Pressure Poisson solver (Step 2); re-bound to gstif_/pdiag_ every step.
     std::unique_ptr<PressureSolver> pressure_solver_;
 
+    // Force / probe monitors (system/<case>.monitors; nullptr without the file).
+    std::unique_ptr<post::Monitors> monitors_;
+    std::ofstream monitors_file_;
+    std::vector<double> dudt_, dvdt_;
+    post::MonitorSample last_sample_;
+    bool has_sample_ = false;
+    int last_sampled_step_ = -1;
+
     // Simulation metrics
     int istart_ = 1;
     double rtime_ = 0.0;
     int iiter_total_ = 0;
 
     void output_results(int iitime, double time_val);
+    bool initialize_monitors(const std::string& prefix, bool restarted);
+    // Samples the monitors at steps that are multiples of their interval, and
+    // at the last step of the run (force = true).
+    void record_monitors(int iitime, bool force = false);
 
     // Turbulence helpers (only called when turbulence_ != nullptr).
     TurbulenceContext turbulence_context() const;

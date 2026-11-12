@@ -8,7 +8,9 @@
 //
 //  * wall faces: boundary sides whose flag classifies as BoundaryKind::Wall,
 //    with adjacent element, opposite node, length, INWARD unit normal and the
-//    first-cell height y_p = 2 * area / length;
+//    first-cell height y_p = 2 * area / length (triangles). On a
+//    quadrilateral, y_p is the mean distance of its two off-face nodes from
+//    the face, and the opposite node is -1;
 //  * wall nodes (ascending node id) with a length-weighted inward normal
 //    (bisector at corners; unlike Mesh::wall_node_norm it is never zeroed
 //    except at cusps where the face normals cancel exactly), a
@@ -16,7 +18,8 @@
 //  * wall distance d and nearest wall face for every mesh node.
 //
 // Inward normals are oriented towards the opposite node of the adjacent
-// element, so they do not depend on the node order of the boundary side.
+// element (quadrilaterals: the mean of the off-face nodes), so they do not
+// depend on the node order of the boundary side.
 //
 // Throws std::invalid_argument for inconsistent input (node / element ids out
 // of range, a wall side that is not an edge of its element, zero-length
