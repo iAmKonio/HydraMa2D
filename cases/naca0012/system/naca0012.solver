@@ -1,0 +1,18 @@
+---------------------------------------------------------------------------------------------------
+Pressure Field Solver (1 - Conjugate Gradient, Only PCG has been implemented)
+1
+---------------------------------------------------------------------------------------------------
+Conjugate Gradient Convergence Tolerances - Relative and Absolute Residual. Zero for OFF
+Relative Residual. Zero for OFF
+1.0e-04
+---------------------------------------------------------------------------------------------------
+Absolute Residual. Zero for OFF
+1.0e-08
+---------------------------------------------------------------------------------------------------
+Linear Solver Options (optional, one "key = value" per line; omitted keys keep the defaults shown)
+method          = gmres
+preconditioner  = ilu0
+operator_format = csr
+reordering      = rcm
+gmres_restart   = 50
+max_iterations  = 500

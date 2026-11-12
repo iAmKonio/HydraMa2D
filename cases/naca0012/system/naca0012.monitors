@@ -1,0 +1,6 @@
+# Aerodynamic force monitor for NACA 0012
+body airfoil_wall
+reference_velocity 1.0
+reference_length 1.0
+interval 1
+moment_center 0.25 0.0

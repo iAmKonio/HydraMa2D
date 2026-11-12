@@ -123,9 +123,29 @@ bool parse_monitor_config(std::istream& in, MonitorConfig& config, std::string& 
                 return false;
             }
             config.probes.push_back(p);
+        } else if (key == "moment_center" || key == "moment_origin" || key == "pitching_moment_center") {
+            if (!once()) return false;
+            if (t.size() != 3) {
+                error = where + "'" + key + "' needs exactly two coordinates (x y)";
+                return false;
+            }
+            if (!parse_double(t[1], config.moment_center_x) || !parse_double(t[2], config.moment_center_y)) {
+                error = where + "'" + key + "' coordinates must be numbers";
+                return false;
+            }
+            config.compute_moment = true;
+        } else if (key == "pitching_moment" || key == "moment") {
+            if (!once()) return false;
+            config.compute_moment = true;
+            if (t.size() == 3) {
+                if (!parse_double(t[1], config.moment_center_x) || !parse_double(t[2], config.moment_center_y)) {
+                    error = where + "'" + key + "' coordinates must be numbers";
+                    return false;
+                }
+            }
         } else {
             error = where + "unknown key '" + t[0] +
-                    "' (known: body, reference_velocity, reference_length, interval, probe)";
+                    "' (known: body, reference_velocity, reference_length, interval, probe, moment_center)";
             return false;
         }
     }
@@ -210,7 +230,7 @@ MonitorSample Monitors::evaluate(const Mesh& mesh, double nu, const std::vector<
     MonitorSample s;
     if (has_body()) {
         s.volume = volume_force(mesh, body_sides_, nu, u, v, p, dudt, dvdt);
-        s.surface = surface_force(mesh, body_sides_, nu, u, v, p);
+        s.surface = surface_force(mesh, body_sides_, nu, u, v, p, config_.moment_center_x, config_.moment_center_y);
         const double U = config_.reference_velocity, L = config_.reference_length;
         s.cd = force_coefficient(s.volume.fx, U, L);
         s.cl = force_coefficient(s.volume.fy, U, L);
@@ -218,6 +238,8 @@ MonitorSample Monitors::evaluate(const Mesh& mesh, double nu, const std::vector<
         s.cl_surface = force_coefficient(s.surface.fy, U, L);
         s.cd_pressure = force_coefficient(s.surface.pressure_fx, U, L);
         s.cl_pressure = force_coefficient(s.surface.pressure_fy, U, L);
+        s.cm = moment_coefficient(s.surface.mz, U, L);
+        s.cm_pressure = moment_coefficient(s.surface.pressure_mz, U, L);
     }
     for (const PointLocation& loc : probes_) {
         s.probe_u.push_back(interpolate(loc, u));
@@ -258,7 +280,13 @@ std::string Monitors::file_header(const std::string& casename) const {
         os << "# probe " << config_.probes[k].name << " at " << format_point(config_.probes[k].x, config_.probes[k].y)
            << "\n";
     os << "step time";
-    if (has_body()) os << " cd cl cd_surface cl_surface cd_pressure cl_pressure";
+    if (has_body()) {
+        if (config_.compute_moment) {
+            os << " cd cl cm cd_surface cl_surface cm_surface cd_pressure cl_pressure cm_pressure";
+        } else {
+            os << " cd cl cd_surface cl_surface cd_pressure cl_pressure";
+        }
+    }
     for (const ProbeSpec& p : config_.probes) os << " u_" << p.name << " v_" << p.name << " p_" << p.name;
     os << "\n";
     return os.str();
@@ -267,9 +295,16 @@ std::string Monitors::file_header(const std::string& casename) const {
 std::string Monitors::format_row(int step, double time, const MonitorSample& s) const {
     std::ostringstream os;
     os << step << " " << std::setprecision(12) << std::scientific << time;
-    if (has_body())
-        os << " " << s.cd << " " << s.cl << " " << s.cd_surface << " " << s.cl_surface << " " << s.cd_pressure << " "
-           << s.cl_pressure;
+    if (has_body()) {
+        if (config_.compute_moment) {
+            os << " " << s.cd << " " << s.cl << " " << s.cm
+               << " " << s.cd_surface << " " << s.cl_surface << " " << s.cm
+               << " " << s.cd_pressure << " " << s.cl_pressure << " " << s.cm_pressure;
+        } else {
+            os << " " << s.cd << " " << s.cl << " " << s.cd_surface << " " << s.cl_surface << " " << s.cd_pressure << " "
+               << s.cl_pressure;
+        }
+    }
     for (std::size_t k = 0; k < s.probe_u.size(); ++k) os << " " << s.probe_u[k] << " " << s.probe_v[k] << " " << s.probe_p[k];
     os << "\n";
     return os.str();

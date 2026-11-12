@@ -1,8 +1,10 @@
 #pragma once
 
+#include "BoundaryConditions.hpp"
 #include "thermal/ThermalConfig.hpp"
 #include <string>
 #include <array>
+#include <optional>
 
 namespace hydrama {
 
@@ -69,6 +71,9 @@ struct SimulationConfig {
     PhysicalConfig physical;
     SolverConfig solver;
     ThermalConfig thermal;
+    InflowConfig inflow;
+    std::optional<int> override_ntime;
+    std::optional<double> override_re;
 };
 
 } // namespace hydrama

@@ -46,6 +46,9 @@ struct MonitorConfig {
     double reference_length = 1.0;
     int interval = 1;
     std::vector<ProbeSpec> probes;
+    double moment_center_x = 0.0;
+    double moment_center_y = 0.0;
+    bool compute_moment = false;
 
     bool empty() const { return body.empty() && probes.empty(); }
 };
@@ -63,6 +66,8 @@ struct MonitorSample {
     double cd = 0.0, cl = 0.0;                 // from `volume`
     double cd_surface = 0.0, cl_surface = 0.0; // from `surface`
     double cd_pressure = 0.0, cl_pressure = 0.0;
+    double cm = 0.0;                            // pitching moment coefficient (surface)
+    double cm_pressure = 0.0;
     std::vector<double> probe_u, probe_v, probe_p;
 };
 

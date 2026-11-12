@@ -267,3 +267,38 @@ TEST_CASE("Solver: monitors do not change the results; a restart appends", "[pos
     CHECK_FALSE(syntax.run.initialized);
     CHECK_THAT(syntax.run.errors, ContainsSubstring("ERROR: *.monitors FILE HAS INVALID FORMAT: line 2: unknown key 'speed'"));
 }
+
+TEST_CASE("Monitors pitching moment evaluation and formatting", "[monitors][moment]") {
+    const std::string text =
+        "body Square_Wall\n"
+        "moment_center 0.25 0.0\n"
+        "reference_velocity 2.0\n"
+        "reference_length 1.5\n";
+    std::istringstream in(text);
+    post::MonitorConfig c;
+    std::string err;
+    REQUIRE(post::parse_monitor_config(in, c, err));
+    CHECK(c.compute_moment);
+    CHECK(c.moment_center_x == 0.25);
+    CHECK(c.moment_center_y == 0.0);
+    CHECK(c.reference_velocity == 2.0);
+    CHECK(c.reference_length == 1.5);
+
+    Mesh m = holed_channel();
+    post::Monitors mon(m, c);
+    std::string header = mon.file_header("case_test");
+    CHECK_THAT(header, ContainsSubstring("step time cd cl cm cd_surface cl_surface cm_surface cd_pressure cl_pressure cm_pressure\n"));
+
+    post::MonitorSample s;
+    s.cd = 1.0;
+    s.cl = 2.0;
+    s.cm = -0.05;
+    s.cd_surface = 1.1;
+    s.cl_surface = 2.1;
+    s.cd_pressure = 0.9;
+    s.cl_pressure = 1.9;
+    s.cm_pressure = -0.04;
+    std::string row = mon.format_row(10, 0.5, s);
+    CHECK_THAT(row, ContainsSubstring("10 "));
+    CHECK_THAT(row, ContainsSubstring("-5.000000000000e-02"));
+}

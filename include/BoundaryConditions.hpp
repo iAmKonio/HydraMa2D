@@ -36,10 +36,39 @@ struct MovingWallSpec {
     bool corners_zero = false; // if true, nodes shared with stationary walls stay zero
 };
 
+// Inflow velocity Dirichlet specification (for uniform inflow or angle of attack).
+struct InflowSpec {
+    double u = 1.0;
+    double v = 0.0;
+};
+
+struct InflowConfig {
+    double default_u = 1.0;
+    double default_v = 0.0;
+    bool has_default = false;
+    std::map<int, InflowSpec> boundary_specs;
+
+    bool empty() const noexcept {
+        return !has_default && boundary_specs.empty();
+    }
+
+    bool has_boundary(int flag) const noexcept {
+        return boundary_specs.find(flag) != boundary_specs.end();
+    }
+
+    InflowSpec get_spec(int flag) const noexcept {
+        auto it = boundary_specs.find(flag);
+        if (it != boundary_specs.end()) return it->second;
+        if (has_default) return {default_u, default_v};
+        return {1.0, 0.0};
+    }
+};
+
 void apply_velocity_bcs(const Mesh& mesh,
                         std::vector<double>& u,
                         std::vector<double>& v,
-                        const std::map<int, MovingWallSpec>& wall_specs = {});
+                        const std::map<int, MovingWallSpec>& wall_specs = {},
+                        const InflowConfig& inflow = {});
 
 // Prescribed velocity of one node.
 struct NodeVelocity {

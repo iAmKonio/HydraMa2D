@@ -48,6 +48,33 @@ public:
     const ThermalConfig& thermal_config() const noexcept { return thermal_config_; }
     const std::vector<double>& temperature() const noexcept { return T_; }
     std::vector<double>& temperature() noexcept { return T_; }
+
+    // Inflow velocity specifications (Phase 1.4: system/<case>.inflow, CLI flags, or set_inflow_config)
+    void set_inflow_config(InflowConfig config) { inflow_config_ = std::move(config); }
+    const InflowConfig& inflow_config() const noexcept { return inflow_config_; }
+    void set_inflow_velocity(double u, double v) {
+        inflow_config_.has_default = true;
+        inflow_config_.default_u = u;
+        inflow_config_.default_v = v;
+    }
+    void set_angle_of_attack(double alpha_deg, double speed = 1.0) {
+        constexpr double kPi = 3.14159265358979323846;
+        double rad = alpha_deg * (kPi / 180.0);
+        set_inflow_velocity(speed * std::cos(rad), speed * std::sin(rad));
+    }
+    void set_max_steps(int n) {
+        config_.override_ntime = n;
+        config_.control.ntime = n;
+    }
+    void set_reynolds_number(double re) {
+        config_.override_re = re;
+        config_.physical.re = re;
+    }
+    const Mesh& mesh() const noexcept { return mesh_; }
+    const std::vector<double>& u() const noexcept { return u_; }
+    const std::vector<double>& v() const noexcept { return v_; }
+    const std::vector<double>& p() const noexcept { return p_; }
+
     WallThermalReport compute_wall_nusselt(int boundary_flag, double delta_T = 1.0, double ref_length = 1.0) const {
         return hydrama::compute_wall_nusselt(mesh_, thermal_config_, T_, boundary_flag, delta_T, ref_length);
     }
@@ -72,6 +99,9 @@ private:
 
     // Moving and rotating walls
     std::map<int, MovingWallSpec> wall_specs_;
+
+    // Inflow boundary velocity specifications (system/<case>.inflow)
+    InflowConfig inflow_config_;
 
     // Physical parameter
     double ani_ = 0.0; // 1.0 / Re

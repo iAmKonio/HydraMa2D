@@ -454,6 +454,190 @@ bool IO::read_walls_config(const std::string& filepath,
     return true;
 }
 
+bool IO::read_inflow(const std::string& filepath, InflowConfig& inflow) {
+    std::string error;
+    if (!read_inflow_config(filepath, inflow, error)) {
+        std::cerr << "ERROR: *.inflow FILE HAS INVALID FORMAT: " << error << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool IO::read_inflow_config(const std::string& filepath,
+                            InflowConfig& inflow,
+                            std::string& error) {
+    inflow = InflowConfig{};
+    error.clear();
+    std::error_code ec;
+    if (!std::filesystem::exists(filepath, ec)) {
+        return true;
+    }
+    std::ifstream in(filepath);
+    if (!in.is_open()) {
+        error = "cannot open " + filepath;
+        return false;
+    }
+
+    constexpr double kPi = 3.14159265358979323846;
+    struct ParsingState {
+        double speed = 1.0;
+        double angle_deg = 0.0;
+        double u = 1.0;
+        double v = 0.0;
+        bool polar_mode = true;
+        bool modified = false;
+    };
+    ParsingState global_default;
+    std::map<int, ParsingState> per_boundary;
+
+    std::string line;
+    int line_number = 0;
+    while (std::getline(in, line)) {
+        ++line_number;
+        auto hash_pos = line.find('#');
+        if (hash_pos != std::string::npos) line.erase(hash_pos);
+        auto slash_pos = line.find("//");
+        if (slash_pos != std::string::npos) line.erase(slash_pos);
+
+        std::istringstream iss(line);
+        std::vector<std::string> tokens;
+        std::string token;
+        while (iss >> token) {
+            tokens.push_back(token);
+        }
+        if (tokens.empty()) continue;
+
+        std::size_t idx = 0;
+        std::string first = tokens[idx];
+        for (char& c : first) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        bool is_boundary = (first == "boundary" || first == "inlet" || first == "flag" || first == "patch");
+        bool is_default = (first == "default");
+
+        int flag = -1;
+        if (is_boundary) {
+            ++idx;
+            if (idx >= tokens.size()) {
+                error = filepath + ":" + std::to_string(line_number) + ": expected boundary name or flag after '" + tokens[0] + "'";
+                return false;
+            }
+            std::string bname = tokens[idx++];
+            try {
+                std::size_t pos = 0;
+                int val = std::stoi(bname, &pos);
+                if (pos == bname.size()) {
+                    flag = val;
+                }
+            } catch (...) {}
+
+            if (flag < 0) {
+                std::string lower = bname;
+                for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                if (lower == "inlet" || lower == "inflow") {
+                    flag = flags::kInlet;
+                } else {
+                    const auto res = mesh::resolve_boundary_name(bname);
+                    if (res.resolved()) {
+                        auto sf = mesh::solver_flag(res.type);
+                        if (sf.has_value()) {
+                            flag = *sf;
+                        }
+                    }
+                    if (flag < 0) {
+                        error = filepath + ":" + std::to_string(line_number) + ": unknown boundary '" + bname + "'";
+                        return false;
+                    }
+                }
+            }
+        } else if (is_default) {
+            ++idx;
+        }
+
+        ParsingState& state = (flag >= 0) ? per_boundary[flag] : global_default;
+
+        while (idx < tokens.size()) {
+            std::string key = tokens[idx++];
+            for (char& c : key) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+            if (key == "speed" || key == "mag" || key == "magnitude" || key == "velocity" || key == "u_inf" || key == "uinf") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for '" + key + "'";
+                    return false;
+                }
+                if (!parse_double(tokens[idx++], state.speed)) {
+                    error = filepath + ":" + std::to_string(line_number) + ": invalid value for '" + key + "'";
+                    return false;
+                }
+                state.polar_mode = true;
+                state.modified = true;
+            } else if (key == "angle" || key == "alpha" || key == "aoa" || key == "angle_of_attack") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for '" + key + "'";
+                    return false;
+                }
+                if (!parse_double(tokens[idx++], state.angle_deg)) {
+                    error = filepath + ":" + std::to_string(line_number) + ": invalid value for '" + key + "'";
+                    return false;
+                }
+                state.polar_mode = true;
+                state.modified = true;
+            } else if (key == "u" || key == "ux") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for '" + key + "'";
+                    return false;
+                }
+                if (!parse_double(tokens[idx++], state.u)) {
+                    error = filepath + ":" + std::to_string(line_number) + ": invalid value for '" + key + "'";
+                    return false;
+                }
+                state.polar_mode = false;
+                state.modified = true;
+            } else if (key == "v" || key == "uy") {
+                if (idx >= tokens.size()) {
+                    error = filepath + ":" + std::to_string(line_number) + ": missing value for '" + key + "'";
+                    return false;
+                }
+                if (!parse_double(tokens[idx++], state.v)) {
+                    error = filepath + ":" + std::to_string(line_number) + ": invalid value for '" + key + "'";
+                    return false;
+                }
+                state.polar_mode = false;
+                state.modified = true;
+            } else {
+                error = filepath + ":" + std::to_string(line_number) + ": unknown keyword '" + key + "'";
+                return false;
+            }
+        }
+    }
+
+    if (global_default.modified) {
+        inflow.has_default = true;
+        if (global_default.polar_mode) {
+            double rad = global_default.angle_deg * (kPi / 180.0);
+            inflow.default_u = global_default.speed * std::cos(rad);
+            inflow.default_v = global_default.speed * std::sin(rad);
+        } else {
+            inflow.default_u = global_default.u;
+            inflow.default_v = global_default.v;
+        }
+    }
+
+    for (const auto& [bflag, bstate] : per_boundary) {
+        double u_val = 1.0;
+        double v_val = 0.0;
+        if (bstate.polar_mode) {
+            double rad = bstate.angle_deg * (kPi / 180.0);
+            u_val = bstate.speed * std::cos(rad);
+            v_val = bstate.speed * std::sin(rad);
+        } else {
+            u_val = bstate.u;
+            v_val = bstate.v;
+        }
+        inflow.boundary_specs[bflag] = InflowSpec{u_val, v_val};
+    }
+    return true;
+}
+
 bool IO::read_case_mesh(const std::string& constant_dir, const std::string& casename, Mesh& mesh) {
     MeshFileLocation mesh_file;
     if (!locate_mesh_file(constant_dir, casename, mesh_file)) return false;

@@ -103,6 +103,7 @@ add_executable(hydrama2d_tests
     test_skin_friction.cpp
     test_spectral.cpp
     test_thermal.cpp
+    test_inflow_bc.cpp
 )
 target_link_libraries(hydrama2d_tests PRIVATE hydrama2d_core Catch2::Catch2WithMain)
 target_compile_options(hydrama2d_tests PRIVATE ${HYDRAMA2D_COMPILE_OPTIONS})
@@ -149,3 +150,8 @@ endif()
 # SKIP_RETURN_CODE: a Catch2 SKIP() (exit code 4, e.g. the CGNS file tests of
 # a build without CGNS) is reported as skipped, not as failed.
 catch_discover_tests(hydrama2d_tests PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 4 ${_hydrama2d_test_dl_paths})
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME polar_sweeps_tools COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_polar_tools.py)
+endif()
