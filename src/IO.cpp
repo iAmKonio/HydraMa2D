@@ -262,6 +262,15 @@ bool IO::read_turbulence(const std::string& filepath, TurbulenceConfig& config) 
     return true;
 }
 
+bool IO::read_thermal(const std::string& filepath, ThermalConfig& config) {
+    std::string error;
+    if (!read_thermal_config(filepath, config, error)) {
+        std::cerr << "ERROR: *.thermal FILE HAS INVALID FORMAT: " << error << "\n";
+        return false;
+    }
+    return true;
+}
+
 bool IO::read_walls(const std::string& filepath, std::map<int, MovingWallSpec>& wall_specs) {
     std::string error;
     if (!read_walls_config(filepath, wall_specs, error)) {
@@ -976,6 +985,61 @@ bool IO::read_turbulence_restart(const std::string& filepath, int npoin,
                 error = "invalid or missing value for node " + std::to_string(i + 1) + ", field " + data.names[k];
                 return false;
             }
+        }
+    }
+    if (in >> token) {
+        error = "unexpected trailing data";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
+static constexpr const char* kThermalRestartMagic = "HydraMa2D-thermal-restart";
+static constexpr int kThermalRestartVersion = 1;
+
+bool IO::write_thermal_restart(const std::string& filepath,
+                               const std::vector<double>& T) {
+    std::ofstream out(filepath);
+    if (!out.is_open()) return false;
+    out << kThermalRestartMagic << " " << kThermalRestartVersion << "\n";
+    out << "npoin " << T.size() << "\n";
+    out << std::scientific << std::setprecision(std::numeric_limits<double>::max_digits10 - 1);
+    for (double val : T) {
+        out << val << "\n";
+    }
+    return true;
+}
+
+bool IO::read_thermal_restart(const std::string& filepath, int npoin,
+                              std::vector<double>& T, std::string& error) {
+    T.clear();
+    std::ifstream in(filepath);
+    if (!in.is_open()) {
+        error = "cannot open " + filepath;
+        return false;
+    }
+    std::string magic, key;
+    int version = 0;
+    if (!(in >> magic >> version) || magic != kThermalRestartMagic || version != kThermalRestartVersion) {
+        error = "not a thermal restart file (version " + std::to_string(kThermalRestartVersion) + ")";
+        return false;
+    }
+    long long file_npoin = -1;
+    if (!(in >> key >> file_npoin) || key != "npoin") {
+        error = "missing npoin line";
+        return false;
+    }
+    if (file_npoin != npoin) {
+        error = "file has " + std::to_string(file_npoin) + " nodes, mesh has " + std::to_string(npoin);
+        return false;
+    }
+    T.resize(npoin);
+    std::string token;
+    for (int i = 0; i < npoin; ++i) {
+        if (!(in >> token) || !parse_restart_double(token, T[i])) {
+            error = "invalid or missing value for node " + std::to_string(i + 1);
+            return false;
         }
     }
     if (in >> token) {

@@ -9,6 +9,8 @@
 #include "post/Monitors.hpp"
 #include "post/SkinFriction.hpp"
 #include "post/Spectral.hpp"
+#include "thermal/ThermalConfig.hpp"
+#include "thermal/ThermalPhysics.hpp"
 #include "turbulence/TurbulenceConfig.hpp"
 #include "turbulence/TurbulenceModel.hpp"
 #include <fstream>
@@ -41,6 +43,15 @@ public:
     post::SheddingAnalysis analyze_shedding(double t_transient = -1.0) const;
     std::vector<post::RecirculationBubble> detect_recirculation(const std::string& patch_name, double u_ref = 1.0) const;
 
+    // Thermal energy equation and Boussinesq buoyancy (Phase 1.3)
+    void set_thermal_config(ThermalConfig config) { thermal_config_ = std::move(config); }
+    const ThermalConfig& thermal_config() const noexcept { return thermal_config_; }
+    const std::vector<double>& temperature() const noexcept { return T_; }
+    std::vector<double>& temperature() noexcept { return T_; }
+    WallThermalReport compute_wall_nusselt(int boundary_flag, double delta_T = 1.0, double ref_length = 1.0) const {
+        return hydrama::compute_wall_nusselt(mesh_, thermal_config_, T_, boundary_flag, delta_T, ref_length);
+    }
+
 private:
     SimulationConfig config_;
     Mesh mesh_;
@@ -51,6 +62,13 @@ private:
     std::unique_ptr<TurbulenceModel> turbulence_;
     WallGeometry walls_;
     std::vector<double> nu_eff_elem_; // diffusivity for the time step limit
+
+    // Thermal energy transport and Boussinesq buoyancy
+    ThermalConfig thermal_config_;
+    std::vector<double> T_;
+    std::vector<double> T_old_;
+    std::vector<double> rhs_T_;
+    std::vector<double> alpha_elem_;
 
     // Moving and rotating walls
     std::map<int, MovingWallSpec> wall_specs_;
@@ -111,6 +129,10 @@ private:
     void update_effective_viscosity();
     std::string turbulence_log_line() const;
     double max_turbulence_residual() const;
+
+    // Thermal helpers (only called when thermal_config_.enabled).
+    bool initialize_thermal(const std::string& prefix, bool restarted);
+    void advance_temperature();
 };
 
 } // namespace hydrama

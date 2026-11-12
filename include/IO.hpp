@@ -47,6 +47,9 @@ public:
     // configuration (config.present == false) and returns true.
     static bool read_turbulence(const std::string& filepath, TurbulenceConfig& config);
 
+    // Optional system/<case>.thermal: missing file leaves thermal disabled (config.enabled == false) and returns true.
+    static bool read_thermal(const std::string& filepath, ThermalConfig& config);
+
     // Optional system/<case>.walls: missing file leaves wall_specs empty and returns true.
     static bool read_walls(const std::string& filepath, std::map<int, MovingWallSpec>& wall_specs);
     static bool read_walls_config(const std::string& filepath, std::map<int, MovingWallSpec>& wall_specs, std::string& error);
@@ -133,6 +136,14 @@ public:
     // different node count, or non-finite values.
     static bool read_turbulence_restart(const std::string& filepath, int npoin,
                                         TurbulenceRestartData& data, std::string& error);
+
+    // Thermal restart file (results/<case>.thermal.var), written with 17 significant digits:
+    static bool write_thermal_restart(const std::string& filepath,
+                                      const std::vector<double>& T);
+
+    // Reads a thermal restart file for a mesh with `npoin` nodes.
+    static bool read_thermal_restart(const std::string& filepath, int npoin,
+                                     std::vector<double>& T, std::string& error);
 };
 
 } // namespace hydrama

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "thermal/ThermalConfig.hpp"
 #include <string>
 #include <array>
 
@@ -67,6 +68,7 @@ struct SimulationConfig {
     ControlConfig control;
     PhysicalConfig physical;
     SolverConfig solver;
+    ThermalConfig thermal;
 };
 
 } // namespace hydrama
