@@ -7,6 +7,8 @@
 #include "PressureSolver.hpp"
 #include "geometry/WallGeometry.hpp"
 #include "post/Monitors.hpp"
+#include "post/SkinFriction.hpp"
+#include "post/Spectral.hpp"
 #include "turbulence/TurbulenceConfig.hpp"
 #include "turbulence/TurbulenceModel.hpp"
 #include <fstream>
@@ -34,6 +36,10 @@ public:
     // Moving and rotating wall specifications (from system/<case>.walls or set_wall_specs)
     void set_wall_specs(std::map<int, MovingWallSpec> specs) { wall_specs_ = std::move(specs); }
     const std::map<int, MovingWallSpec>& wall_specs() const noexcept { return wall_specs_; }
+
+    // Automated post-processing diagnostics (Phase 1.2)
+    post::SheddingAnalysis analyze_shedding(double t_transient = -1.0) const;
+    std::vector<post::RecirculationBubble> detect_recirculation(const std::string& patch_name, double u_ref = 1.0) const;
 
 private:
     SimulationConfig config_;
@@ -84,6 +90,9 @@ private:
     post::MonitorSample last_sample_;
     bool has_sample_ = false;
     int last_sampled_step_ = -1;
+    std::vector<double> monitor_time_history_;
+    std::vector<double> monitor_cl_history_;
+    std::vector<double> monitor_cd_history_;
 
     // Simulation metrics
     int istart_ = 1;
